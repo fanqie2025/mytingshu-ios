@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WebKit
 
 // MARK: - 迷你播放条
@@ -470,6 +471,7 @@ struct SettingsView: View {
     @State private var showImport = false
     @State private var showRate = false
     @State private var showSleep = false
+    @State private var showDiag = false
     @State private var importText = ""
     @State private var importURL = ""
     @State private var importMsg = ""
@@ -564,6 +566,7 @@ struct SettingsView: View {
                 Section("关于") {
                     HStack { Text("版本"); Spacer(); Text("0.1.0").foregroundColor(.secondary) }
                     HStack { Text("源数量"); Spacer(); Text("\(settings.enabledSources.count)/\(store.all.count)").foregroundColor(.secondary) }
+                    Button("诊断 / 源测试") { showDiag = true }
                     Text("本 App 只做播放器，内容来自各听书站；音频版权归原站所有。")
                         .font(.caption).foregroundColor(.secondary)
                 }
@@ -573,6 +576,7 @@ struct SettingsView: View {
             .sheet(isPresented: $showImport) { importSheet }
             .sheet(isPresented: $showRate) { RateSheet() }
             .sheet(isPresented: $showSleep) { SleepSheet() }
+            .sheet(isPresented: $showDiag) { DiagnosticsView() }
         }
     }
 
@@ -1101,4 +1105,93 @@ let rateOptions: [RateOption] = [
 func rateLabel(_ r: Float) -> String {
     if let hit = rateOptions.first(where: { abs($0.value - r) < 0.01 }) { return hit.label }
     return String(format: "%.2fx", r)
+}
+
+// MARK: - 诊断页（源测试 + 订阅链接测试 + 复制报告）
+
+struct DiagnosticsView: View {
+    @ObservedObject var store = SourceStore.shared
+    @ObservedObject var settings = SourceSettings.shared
+    @ObservedObject var cache = CacheManager.shared
+    @StateObject private var diag = Diagnostics()
+    @Environment(\.dismiss) private var dismiss
+    @State private var linkURL = defaultSubscriptionURL
+    @State private var copied = false
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section {
+                    infoRow("App 版本", "\(appVersion) (\(buildNumber))")
+                    infoRow("系统", "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)")
+                    infoRow("机型", UIDevice.current.model)
+                    infoRow("已启用源", "\(settings.enabledSources.count)/\(store.all.count)")
+                    infoRow("缓存占用", cache.sizeText())
+                } header: { Text("环境") }
+
+                Section {
+                    Button {
+                        Task { await diag.runAll(sources: settings.enabledSources) }
+                    } label: {
+                        if diag.running {
+                            HStack { ProgressView(); Text("测试中…") }
+                        } else {
+                            Text("一键测试所有源（搜索「三体」）")
+                        }
+                    }
+                    .disabled(diag.running)
+
+                    ForEach(diag.rows) { r in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack {
+                                Text(r.ok == nil ? "⏳" : (r.ok! ? "✅" : "❌"))
+                                Text(r.name).font(.subheadline)
+                                Spacer()
+                                Text("\(r.ms)ms").font(.caption2).foregroundColor(.secondary)
+                            }
+                            Text(r.detail).font(.caption2).foregroundColor(.secondary).lineLimit(3)
+                        }
+                    }
+                } header: { Text("源测试") }
+
+                Section {
+                    TextField("订阅地址", text: $linkURL)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                        .font(.caption)
+                    Button("测试这个订阅链接") { Task { await diag.testSubscription(linkURL) } }
+                    if let s = diag.linkResult {
+                        Text(s).font(.caption2)
+                    }
+                } header: { Text("订阅链接") }
+
+                Section {
+                    Button(copied ? "已复制到剪贴板 ✓" : "复制诊断报告") {
+                        UIPasteboard.general.string = diag.report(settings: settings, cache: cache)
+                        copied = true
+                    }
+                    .disabled(diag.rows.isEmpty)
+                }
+            }
+            .navigationTitle("诊断")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("关闭") { dismiss() } } }
+        }
+    }
+
+    private func infoRow(_ title: String, _ value: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value).foregroundColor(.secondary)
+        }
+    }
+
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    }
+
+    private var buildNumber: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+    }
 }
