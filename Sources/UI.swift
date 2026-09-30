@@ -1141,6 +1141,15 @@ struct DiagnosticsView: View {
                     }
                     .disabled(diag.running)
 
+                    Button {
+                        Task { await diag.runDeep(sources: settings.enabledSources) }
+                    } label: {
+                        Text("深度测试（搜索 → 章节 → 音频试听）")
+                    }
+                    .disabled(diag.running)
+                    Text("深度测试会把每个源的第一本书走完整链路，并真拉 1KB 音频确认能播（不真的出声）；每个源几秒，慢一些。")
+                        .font(.caption2).foregroundColor(.secondary)
+
                     ForEach(diag.rows) { r in
                         VStack(alignment: .leading, spacing: 3) {
                             HStack {

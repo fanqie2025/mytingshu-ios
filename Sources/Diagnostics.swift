@@ -18,12 +18,15 @@ final class Diagnostics: ObservableObject {
     @Published var rows: [Row] = []
     @Published var running = false
     @Published var linkResult: String?
+    @Published var lastMode = "搜索测试"
 
     private let keyword = "三体"
 
+    /// 只测搜索（快）
     func runAll(sources: [any BookSource]) async {
         guard !running else { return }
         running = true
+        lastMode = "搜索测试"
         rows = sources.map { Row(sourceId: $0.id, name: $0.name, host: $0.host, ok: nil, ms: 0, detail: "等待…") }
         for (i, s) in sources.enumerated() {
             let t0 = Date()
@@ -39,6 +42,48 @@ final class Diagnostics: ObservableObject {
                 rows[i].ms = ms
                 rows[i].detail = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             }
+        }
+        running = false
+    }
+
+    /// 深度测试：搜索 → 详情 → 第一集音频地址 → 真拉 1KB 验证是音频
+    /// （跟 App 实际播放链路一致，只是不真的出声）
+    func runDeep(sources: [any BookSource]) async {
+        guard !running else { return }
+        running = true
+        lastMode = "深度测试（搜索→章节→音频试听）"
+        rows = sources.map { Row(sourceId: $0.id, name: $0.name, host: $0.host, ok: nil, ms: 0, detail: "等待…") }
+        for (i, s) in sources.enumerated() {
+            let t0 = Date()
+            var log = ""
+            do {
+                let books = try await s.search(keyword: keyword, page: 1)
+                log += "搜索 \(books.count) 条"
+                guard let b = books.first else {
+                    rows[i].ok = false; rows[i].detail = log + "（没结果，后面的步骤跳过）"
+                    rows[i].ms = Int(Date().timeIntervalSince(t0) * 1000); continue
+                }
+                let d = try await s.detail(for: b)
+                log += " · 章节 \(d.episodes.count) 集"
+                guard let ep = d.episodes.first else { throw SourceError.parse("章节为空") }
+                let audio = try await s.audioURL(for: ep)
+                log += " · 取到音频地址"
+                let referer = s.audioHeaders(for: ep)["Referer"]
+                let (playable, info) = await HTTPClient.isPlayableAudio(audio.absoluteString, referer: referer)
+                log += playable ? " · 试听 \(info)" : " · 试听失败 \(info)"
+                rows[i].ok = playable
+                rows[i].detail = log
+            } catch {
+                let msg = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                if msg.contains("验证") {
+                    rows[i].ok = true
+                    rows[i].detail = log + " · 需要过一次图片验证码（点搜索页底部的「去验证」）"
+                } else {
+                    rows[i].ok = false
+                    rows[i].detail = log + " · " + msg
+                }
+            }
+            rows[i].ms = Int(Date().timeIntervalSince(t0) * 1000)
         }
         running = false
     }
@@ -68,7 +113,7 @@ final class Diagnostics: ObservableObject {
         lines.append("已启用源: \(settings.enabledSources.count)")
         lines.append("缓存占用: \(cache.sizeText())")
         lines.append("")
-        lines.append("— 搜索「\(keyword)」结果 —")
+        lines.append("— \(lastMode)：搜索「\(keyword)」—")
         for r in rows {
             let mark = r.ok == nil ? "…" : (r.ok! ? "✅" : "❌")
             lines.append("\(mark) \(r.name) [\(r.host)] \(r.ms)ms  \(r.detail)")
@@ -84,3 +129,5 @@ final class Diagnostics: ObservableObject {
 
 /// 默认的订阅地址（和 README 里一致）
 let defaultSubscriptionURL = "https://cdn.jsdelivr.net/gh/fanqie2025/mytingshu-ios@main/subscription/sources.json"
+
+
