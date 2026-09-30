@@ -23,7 +23,8 @@ final class SourceStore: ObservableObject {
         PtcmsSource(id: "ting13", name: "13听书网", host: "https://www.ting13.cc",
                     dirPrefix: "/tingdirs/",
                     desc: "13听书网（与爱听书同一个书库）。"),
-        LetingSource()
+        LetingSource(),
+        Ting55Source()
     ]
 
     /// 合并所有源并按 id 去重，优先级：原生源 > 订阅导入的 > 内置打包的
