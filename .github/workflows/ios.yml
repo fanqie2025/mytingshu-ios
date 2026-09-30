@@ -29,6 +29,9 @@ jobs:
       - name: 编译并打包 IPA
         run: bash build_ipa.sh
 
+      - name: 清理 jsDelivr 缓存（让订阅文件立刻生效）
+        run: curl -s "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/subscription/sources.json" || true
+
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
