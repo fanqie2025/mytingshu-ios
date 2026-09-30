@@ -68,7 +68,8 @@ enum HTTPClient {
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
         req.httpBody = body.data(using: .utf8)
-        let (data, http) = try await session.data(for: req)
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw SourceError.message("无 HTTP 响应") }
         guard http.statusCode == 200 else { throw SourceError.http(http.statusCode, urlString) }
         return decode(data, gbk: gbk)
     }
