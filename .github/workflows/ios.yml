@@ -1,0 +1,40 @@
+name: build-ios-ipa
+
+# 云端 macOS 编译 → 未签名 IPA（巨魔 TrollStore 直接安装）
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 ldid（伪签名，可选）
+        run: brew install ldid || true
+
+      - name: 编译并打包 IPA
+        run: bash build_ipa.sh
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyTingShu-ipa
+          path: build/MyTingShu.ipa
+          if-no-files-found: error
+
+      - name: 发到 Release（手机可直接下载）
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: 我的听书 iOS · 最新构建
+          body: |
+            未签名 IPA，用 **TrollStore（巨魔）** 直接安装。
+            构建号：${{ github.run_number }}
+          files: build/MyTingShu.ipa
+          make_latest: true
