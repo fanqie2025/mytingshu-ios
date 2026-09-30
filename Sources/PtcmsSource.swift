@@ -94,8 +94,10 @@ final class PtcmsSource: BookSource {
                 ?? HTMLNode.select("img", in: [box]).first?.attr("src") ?? ""
             let author = HTMLNode.select("span.book-author a", in: [it]).first?.allText.strippedTags ?? ""
             let artist = HTMLNode.select("span.book-boyin a", in: [it]).first?.allText.strippedTags ?? ""
+            let intro = HTMLNode.select("dd.list-book-des", in: [it]).first?.allText.htmlDecoded.strippedTags ?? ""
             books.append(Book(sourceId: id, title: title, author: author, artist: artist,
-                              cover: cover.absoluteURL(base: host), bookURL: href.absoluteURL(base: host)))
+                              cover: cover.absoluteURL(base: host), bookURL: href.absoluteURL(base: host),
+                              intro: intro))
         }
         return books
     }
