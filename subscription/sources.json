@@ -45,5 +45,31 @@
       "field": "url",
       "referer": "{host}/"
     }
+  },
+  {
+    "id": "i275",
+    "name": "275听书",
+    "host": "http://m.i275.com",
+    "encoding": "utf-8",
+    "warmup": "{host}/",
+    "desc": "275听书网（听中国）。没有分类栏目，用搜索找书；播放页需要先访问首页拿 session，本源已做预热。",
+    "search": {
+      "url": "{host}/search.php?q={kw}",
+      "list": "a[href*=/book/]",
+      "title": "h3@text",
+      "urlRule": "@href",
+      "cover": "img@src",
+      "artist": "@regex(演播\\s*([^\\s]+))",
+      "author": "@regex(作者\\s*([^\\s]+))"
+    },
+    "detail": {
+      "episodes": "a[id*=chapter-pos-]",
+      "episodeTitle": "@text",
+      "episodeUrl": "@href"
+    },
+    "audio": {
+      "type": "regex",
+      "pattern": "url:\\s*\"((?:[^\"\\\\]|\\\\.)*?\\.(?:m4a|mp3)(?:[^\"\\\\]|\\\\.)*)\""
+    }
   }
 ]

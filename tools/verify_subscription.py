@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-按 sources/sources.json 里的规则，把每个源真跑一遍（搜索 → 详情 → 章节 → 音频直链 → Range 探测）。
+按 subscription/sources.json 里的规则，把每个源真跑一遍（搜索 → 详情 → 章节 → 音频直链 → Range 探测）。
 这就是 iOS 端 RuleSource 的执行逻辑的 Python 复刻版，用来在电脑上先验证「订阅链接里的源能不能用」。
 
 用法：
-    python verify_subscription.py                 # 校验仓库里的 sources/sources.json
+    python verify_subscription.py                 # 校验仓库里的 subscription/sources.json
     python verify_subscription.py <本地或URL>      # 校验指定文件/订阅地址
 """
 import json
@@ -12,11 +12,16 @@ import re
 import sys
 import urllib.parse
 import urllib.request
+import http.cookiejar
 
 sys.stdout.reconfigure(encoding="utf-8")
 
 UA_DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 UA_MOBILE = "Mozilla/5.0 (Linux; Android 9; SM-S9280) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Mobile Safari/537.36"
+
+# 整个进程共用一个 CookieJar（i275 这类站要先访问首页拿 session）
+COOKIES = http.cookiejar.CookieJar()
+OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(COOKIES))
 
 
 def fetch(url, data=None, referer=None, ua=UA_DESKTOP, method=None, extra=None):
@@ -27,7 +32,7 @@ def fetch(url, data=None, referer=None, ua=UA_DESKTOP, method=None, extra=None):
         req.add_header("Referer", referer)
     for k, v in (extra or {}).items():
         req.add_header(k, v)
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with OPENER.open(req, timeout=30) as r:
         return r.read(), dict(r.headers), r.status
 
 
@@ -39,9 +44,15 @@ def text_of(html):
 
 
 def select_items(html, container):
-    """极简选择器：支持 'a > b' / 'a b' 两级 + 末级 tag。先按第一段把范围缩到容器内。"""
+    """极简选择器：'a > b' / 'a b' 两级 + 末级 tag，支持 [attr*=值] 过滤。"""
     parts = [p.strip() for p in re.split(r"\s*>\s*", container) if p.strip()]
     tag = parts[-1]
+    attr_filter = None
+    m_attr = re.search(r"\[([\w-]+)\*=\s*([^\]]+)\]", tag)
+    if m_attr:
+        attr_filter = (m_attr.group(1), m_attr.group(2))
+        tag = tag[:m_attr.start()]
+    tag = tag.strip() or "a"
     if len(parts) >= 2:
         first = parts[0]
         m = re.match(r"([a-zA-Z0-9]+)?(?:\.([\w-]+))?", first)
@@ -52,11 +63,14 @@ def select_items(html, container):
         else:
             anchor = re.search(r"<%s[^>]*>" % ftag, html)
         if anchor:
-            # 取容器的第一个子 ul / 容器自身到下一个同级开始
             rest = html[anchor.end():]
             ul = re.search(r"<ul[^>]*>([\s\S]*?)</ul>", rest)
             html = ul.group(1) if ul else rest[:200000]
-    return re.findall(r"<%s[^>]*>[\s\S]*?</%s>" % (tag, tag), html)
+    items = re.findall(r"<%s[^>]*>[\s\S]*?</%s>" % (tag, tag), html)
+    if attr_filter:
+        name, val = attr_filter
+        items = [i for i in items if re.search(r'%s="[^"]*%s' % (re.escape(name), re.escape(val)), i[:400])]
+    return items
 
 
 def pick(item, rule):
@@ -122,6 +136,14 @@ def check_one(rule):
     print("=" * 60)
     print("源：%s  %s" % (name, host))
 
+    # 预热（拿 session / Cookie）
+    if rule.get("warmup"):
+        try:
+            fetch(fill(rule["warmup"], host), referer=host + "/", ua=ua)
+            print("  [OK]   ⓪ 预热 %s" % fill(rule["warmup"], host))
+        except Exception as e:
+            print("  [WARN] ⓪ 预热失败：%s" % e)
+
     # ① 搜索
     sr = rule.get("search")
     books = []
@@ -157,72 +179,80 @@ def check_one(rule):
     if not books:
         return ok_all
 
-    # ③ 详情 + 章节
-    book = books[0]
-    html = fetch(book["url"], referer=host + "/", ua=ua)[0].decode("utf-8", "replace")
     dr = rule.get("detail") or {}
-    eps = []
-    if dr.get("episodes"):
-        for it in select_items(html, dr["episodes"]):
-            t = pick(it, dr.get("episodeTitle") or "@text")
-            u = pick(it, dr.get("episodeUrl") or "@href")
-            if u:
-                eps.append({"title": t, "url": u if u.startswith("http") else host.rstrip("/") + u})
-        print("  [%s]   ③ 章节 %d 集，第一集《%s》" % ("OK" if eps else "FAIL", len(eps), eps[0]["title"] if eps else ""))
-        ok_all = ok_all and bool(eps)
-    if not eps:
-        return ok_all
-
-    # ④ 音频
     ar = rule.get("audio") or {}
-    ep = eps[0]
-    audio = ""
-    if ar.get("type") == "post":
-        page = fetch(ep["url"], referer=host + "/", ua=ua)[0].decode("utf-8", "replace")
-        vars_ = {k: meta(page, v) for k, v in (ar.get("metaFrom") or {}).items()}
-        # 注意：body 是表单内容，不能当 URL 补前缀（只做变量替换）
-        body_tpl = ar.get("body", "")
-        for k, v in vars_.items():
-            body_tpl = body_tpl.replace("{%s}" % k, v)
-        body = body_tpl.encode()
-        api = fill(ar["url"], host, extra=vars_)
-        raw, _, _ = fetch(api, data=body, referer=host + "/", ua=ua,
-                          extra={"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
+    play_ref = (ar.get("referer") or host + "/").replace("{host}", host)
+
+    def probe(url):
+        """真拉 1KB，确认是音频"""
+        r = urllib.request.Request(url)
+        r.add_header("User-Agent", ua)
+        r.add_header("Referer", play_ref)
+        r.add_header("Range", "bytes=0-1024")
         try:
-            audio = (json.loads(raw.decode("utf-8-sig", "replace")).get(ar.get("field", "url")) or "")
+            with urllib.request.urlopen(r, timeout=30) as x:
+                head = x.read(1025)
+                ct = x.headers.get("Content-Type", "")
+                good = x.status in (200, 206) and ("audio" in ct or "mpeg" in ct or head[4:8] == b"ftyp" or head[:3] == b"ID3")
+                print("  [%s]   ⑤ 音频可播：HTTP %s  %s  %d 字节" % ("OK" if good else "FAIL", x.status, ct, len(head)))
+                return good
         except Exception as e:
-            print("  [FAIL] ④ 播放接口返回不是 JSON：%s / %s" % (e, raw[:120])); ok_all = False
-    elif ar.get("type") == "regex":
-        page = fetch(ep["url"], referer=host + "/", ua=ua)[0].decode("utf-8", "replace")
-        m = re.search(ar["pattern"], page)
-        audio = m.group(1) if m else ""
-    elif ar.get("type") == "direct":
-        audio = ep["url"]
+            print("  [WARN] ⑤ 这本的音频拉不动：%s" % e)
+            return False
 
-    if not audio:
-        print("  [FAIL] ④ 没取到音频地址"); return False
-    print("  [OK]   ④ 音频地址 %s" % audio[:100])
+    # ③④⑤ 详情 → 章节 → 音频：试前 3 本，只要有一本真能放，就算这个源可用
+    # （站方常有单本音频源失效的情况，不该因此判定整个源坏了）
+    for idx, book in enumerate(books[:3]):
+        html = fetch(book["url"], referer=host + "/", ua=ua)[0].decode("utf-8", "replace")
+        eps = []
+        if dr.get("episodes"):
+            for it in select_items(html, dr["episodes"]):
+                t = pick(it, dr.get("episodeTitle") or "@text")
+                u = pick(it, dr.get("episodeUrl") or "@href")
+                if u:
+                    eps.append({"title": t, "url": u if u.startswith("http") else host.rstrip("/") + u})
+            print("  [%s]   ③ 《%s》章节 %d 集，第一集《%s》"
+                  % ("OK" if eps else "FAIL", book["title"][:16], len(eps), eps[0]["title"] if eps else ""))
+            ok_all = ok_all and bool(eps)
+        if not eps:
+            continue
 
-    # ⑤ 真拉一小段
-    ref = (ar.get("referer") or host + "/").replace("{host}", host)
-    req = urllib.request.Request(audio)
-    req.add_header("User-Agent", ua)
-    req.add_header("Referer", ref)
-    req.add_header("Range", "bytes=0-1024")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            head = r.read(1025)
-            ct = r.headers.get("Content-Type", "")
-            good = r.status in (200, 206) and ("audio" in ct or "mpeg" in ct or head[4:8] == b"ftyp" or head[:3] == b"ID3")
-            print("  [%s]   ⑤ 音频可播：HTTP %s  %s  %d 字节" % ("OK" if good else "FAIL", r.status, ct, len(head)))
-            ok_all = ok_all and good
-    except Exception as e:
-        print("  [FAIL] ⑤ 音频请求失败：%s" % e); ok_all = False
-    return ok_all
+        ep = eps[0]
+        audio = ""
+        if ar.get("type") == "post":
+            page = fetch(ep["url"], referer=host + "/", ua=ua)[0].decode("utf-8", "replace")
+            vars_ = {k: meta(page, v) for k, v in (ar.get("metaFrom") or {}).items()}
+            # body 是表单内容，不能当 URL 补前缀（只做变量替换）
+            body_tpl = ar.get("body", "")
+            for k, v in vars_.items():
+                body_tpl = body_tpl.replace("{%s}" % k, v)
+            api = fill(ar["url"], host, extra=vars_)
+            raw, _, _ = fetch(api, data=body_tpl.encode(), referer=host + "/", ua=ua,
+                              extra={"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
+            try:
+                audio = (json.loads(raw.decode("utf-8-sig", "replace")).get(ar.get("field", "url")) or "")
+            except Exception as e:
+                print("  [FAIL] ④ 播放接口返回不是 JSON：%s / %s" % (e, raw[:120]))
+        elif ar.get("type") == "regex":
+            page = fetch(ep["url"], referer=host + "/", ua=ua)[0].decode("utf-8", "replace")
+            m = re.search(ar["pattern"], page)
+            audio = (m.group(1) if m else "").replace("\\/", "/")
+        elif ar.get("type") == "direct":
+            audio = ep["url"]
+
+        if not audio:
+            print("  [FAIL] ④ 这本没取到音频地址（第 %d 本）" % (idx + 1))
+            continue
+        print("  [OK]   ④ 音频地址 %s" % audio[:100])
+        if probe(audio):
+            return ok_all
+
+    print("  [FAIL] 试了 %d 本都放不出声" % min(3, len(books)))
+    return False
 
 
 def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else "sources/sources.json"
+    src = sys.argv[1] if len(sys.argv) > 1 else "subscription/sources.json"
     if src.startswith("http"):
         raw = fetch(src, ua=UA_DESKTOP)[0].decode("utf-8", "replace")
         rules = json.loads(raw)
@@ -246,3 +276,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+

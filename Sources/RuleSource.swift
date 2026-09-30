@@ -10,6 +10,7 @@ struct SourceRule: Codable, Identifiable {
     var desc: String?
     var encoding: String?          // "utf-8"（默认）或 "gbk"
     var ua: String?                // "mobile"（默认）或 "desktop"（有些站会对手机 UA 跳转）
+    var warmup: String?            // 首次请求前先 GET 这个地址拿 Cookie/session
     var searchable: Bool?
     var discoverable: Bool?
     var headers: [String: String]?
@@ -103,10 +104,26 @@ final class RuleSource: BookSource {
     }
 
     private func fetch(_ url: String, gbk: Bool = false) async throws -> String {
+        await ensureWarmup()
         var headers = rule.headers ?? [:]
         if headers["Referer"] == nil { headers["Referer"] = base }
         let mobile = (rule.ua ?? "mobile").lowercased() != "desktop"
         return try await HTTPClient.text(url, gbk: gbk, headers: headers, referer: base, mobile: mobile)
+    }
+
+    /// 有些站必须先访问首页拿到 session，否则详情/播放页返回的是首页（状态码仍是 200）
+    private static var warmed = Set<String>()
+    private static let warmLock = NSLock()
+
+    private func ensureWarmup() async {
+        guard let w = rule.warmup, !w.isEmpty else { return }
+        RuleSource.warmLock.lock()
+        let need = !RuleSource.warmed.contains(id)
+        if need { RuleSource.warmed.insert(id) }
+        RuleSource.warmLock.unlock()
+        guard need else { return }
+        _ = try? await HTTPClient.text(fill(w), referer: base,
+                                       mobile: (rule.ua ?? "mobile").lowercased() != "desktop")
     }
 
     private func parseList(_ html: String, using lr: SourceRule.ListRule) -> [Book] {
@@ -218,6 +235,8 @@ final class RuleSource: BookSource {
         case "regex":
             let html = try await fetch(episode.url)
             raw = RuleExtractor.regex(a.pattern ?? "", in: html)
+            // JS 里常见 \/ 转义
+            raw = raw.replacingOccurrences(of: "\\/", with: "/")
         case "json":
             let body = try await fetch(episode.url)
             if let data = body.data(using: .utf8),

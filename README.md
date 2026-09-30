@@ -37,6 +37,7 @@ https://raw.githubusercontent.com/fanqie2025/mytingshu-ios/main/subscription/sou
 | 源 | 说明 |
 | --- | --- |
 | 有听网 | 搜索 / 10 个分类 / 章节 / 播放全部实测通过（音频走 POST 接口，带 Referer 防盗链头） |
+| 275听书 | 搜索 / 章节 / 播放实测通过（要先访问首页拿 session，规则里用 `warmup` 预热；站方个别书的音频源已失效，换一本即可） |
 
 > 每次 push 都会在 CI 里跑一遍 `tools/verify_subscription.py`：搜索 → 分类 → 章节 → 音频直链 → Range 探测音频（要求 206 + audio/*），全绿才继续构建。所以订阅链接里的源是「有测试保证」的。
 
