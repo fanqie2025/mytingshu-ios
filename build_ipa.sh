@@ -31,6 +31,9 @@ swiftc \
 echo "==> 组装 .app"
 cp Resources/Info.plist "$BUILD/Payload/$APP.app/"
 cp Resources/*.png "$BUILD/Payload/$APP.app/" 2>/dev/null || true
+# 内置书源：直接把订阅文件打进 App，装完就有源可用（订阅导入的版本会优先生效）
+cp subscription/sources.json "$BUILD/Payload/$APP.app/" 2>/dev/null || echo "   （没有 subscription/sources.json，跳过内置源）"
+echo "APPL????" > "$BUILD/Payload/$APP.app/PkgInfo"
 chmod +x "$BUILD/Payload/$APP.app/$APP"
 
 # 伪签名：TrollStore 能装未签名 ipa，ldid 只是为了兼容性更稳

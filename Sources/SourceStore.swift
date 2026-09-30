@@ -19,13 +19,13 @@ final class SourceStore: ObservableObject {
         KuwoSource()
     ]
 
-    var ruleSources: [any BookSource] { (bundled + imported).map { RuleSource(rule: $0) } }
-
-    /// 合并所有源并按 id 去重（原生源优先，其次打包规则，最后用户导入的）
+    /// 合并所有源并按 id 去重，优先级：原生源 > 订阅导入的 > 内置打包的
+    /// （订阅导入的优先，才能用订阅更新源；内置的保证装完就能用）
     var all: [any BookSource] {
         var seen = Set<String>()
         var out: [any BookSource] = []
-        for s in native + ruleSources where !seen.contains(s.id) {
+        for s in native + imported.map({ RuleSource(rule: $0) }) + bundled.map({ RuleSource(rule: $0) })
+        where !seen.contains(s.id) {
             seen.insert(s.id)
             out.append(s)
         }
@@ -119,13 +119,16 @@ final class SourceStore: ObservableObject {
         }
     }
 
+    /// 打包在 App 里的书源（构建时把 subscription/sources.json 复制进来），保证装完就有源可用
     private static func loadBundledRules() -> [SourceRule] {
         guard let urls = Bundle.main.urls(forResourcesWithExtension: "json", subdirectory: nil) else { return [] }
-        let dec = JSONDecoder()
-        return urls.filter { $0.lastPathComponent.hasPrefix("source_") }.compactMap { u in
-            guard let d = try? Data(contentsOf: u) else { return nil }
-            return try? dec.decode(SourceRule.self, from: d)
+        var rules: [SourceRule] = []
+        for u in urls {
+            guard let d = try? Data(contentsOf: u),
+                  let text = String(data: d, encoding: .utf8) else { continue }
+            if let parsed = try? parseRules(text) { rules.append(contentsOf: parsed) }
         }
+        return rules
     }
 }
 
