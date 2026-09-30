@@ -17,6 +17,24 @@ jobs:
       - name: 校验订阅书源（搜索→详情→章节→音频直链→音频可播）
         run: python3 tools/verify_subscription.py subscription/sources.json
 
+  # 原生源的「真实链路」校验：每个源跑一遍搜索→详情→章节→音频(206)。
+  # 这些脚本来自各源的逆向，跑在境外 runner 上可能因网络抖动失败 ——
+  # 所以这一 job 只做「可见性」，不阻塞 IPA 构建（build 不依赖它）。
+  live-sources:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: 逐个跑原生源的真实链路校验
+        run: |
+          set +e
+          for f in tools/live_tests/*_verify.py; do
+            echo "=================================================="
+            echo "▶ $f"
+            timeout 180 python3 "$f" || echo "⚠️ $f 未通过（可能是境外网络问题，本机复跑确认）"
+          done
+          exit 0
+
   build:
     needs: verify-sources
     runs-on: macos-14
@@ -49,4 +67,5 @@ jobs:
             构建号：${{ github.run_number }}
           files: build/MyTingShu.ipa
           make_latest: true
+
 
