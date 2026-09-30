@@ -9,6 +9,7 @@ struct SourceRule: Codable, Identifiable {
     var host: String
     var desc: String?
     var encoding: String?          // "utf-8"（默认）或 "gbk"
+    var ua: String?                // "mobile"（默认）或 "desktop"（有些站会对手机 UA 跳转）
     var searchable: Bool?
     var discoverable: Bool?
     var headers: [String: String]?
@@ -26,7 +27,8 @@ struct SourceRule: Codable, Identifiable {
     }
 
     struct ListRule: Codable {
-        var url: String                    // 支持 {kw} {page} {host}
+        var url: String                    // 第 1 页；支持 {kw} {page} {host}
+        var pageUrl: String?               // 第 2 页起（含 {page}），不填则用 url 替换 {page}
         var list: String                   // 条目容器选择器
         var title: String                  // 取值规则，如 "h2 a@text"
         var urlRule: String?               // 条目链接取值，如 "h2 a@href"（默认同 title 的 @href）
@@ -49,11 +51,15 @@ struct SourceRule: Codable, Identifiable {
     }
 
     struct AudioRule: Codable {
-        var type: String                   // regex | direct | json | redirect
+        var type: String                   // regex | direct | json | redirect | post
         var pattern: String?               // regex 用
-        var field: String?                 // json 用（点号路径）
+        var field: String?                 // json / post 用（点号路径）
         var prefix: String?                // 相对地址前缀
-        var referer: String?
+        var referer: String?               // 播放时的 Referer（不少 CDN 防盗链）
+        var headers: [String: String]?     // 播放时额外请求头
+        var url: String?                   // post 用：接口地址
+        var body: String?                  // post 用：表单体模板，可用 {变量}
+        var metaFrom: [String: String]?    // post 用：变量名 -> 章节页 <meta name="...">
     }
 
     struct VerificationRule: Codable {
@@ -99,7 +105,8 @@ final class RuleSource: BookSource {
     private func fetch(_ url: String, gbk: Bool = false) async throws -> String {
         var headers = rule.headers ?? [:]
         if headers["Referer"] == nil { headers["Referer"] = base }
-        return try await HTTPClient.text(url, gbk: gbk, headers: headers, referer: base)
+        let mobile = (rule.ua ?? "mobile").lowercased() != "desktop"
+        return try await HTTPClient.text(url, gbk: gbk, headers: headers, referer: base, mobile: mobile)
     }
 
     private func parseList(_ html: String, using lr: SourceRule.ListRule) -> [Book] {
@@ -153,7 +160,11 @@ final class RuleSource: BookSource {
         guard let lr = rule.search ?? listRuleFromDetail() else { return [] }
         var url = category.url
         if page > 1 {
-            url = url.contains("?") ? "\(url)&page=\(page)" : url
+            if let tpl = lr.pageUrl, !tpl.isEmpty {
+                url = fill(tpl, page: page)
+            } else if url.contains("?") {
+                url = "\(url)&page=\(page)"
+            }
         }
         let gbk = (rule.encoding ?? "utf-8").lowercased().contains("gb")
         let html = try await fetch(url, gbk: gbk)
@@ -213,6 +224,23 @@ final class RuleSource: BookSource {
                let obj = try? JSONSerialization.jsonObject(with: data) {
                 raw = value(at: a.field ?? "", in: obj)
             }
+        case "post":
+            // 先抓章节页，从 <meta> 里取参数，再 POST 表单拿 JSON 里的地址
+            let page = try await fetch(episode.url)
+            var vars: [String: String] = [:]
+            for (key, metaName) in a.metaFrom ?? [:] {
+                vars[key] = RuleExtractor.meta(metaName, in: page)
+            }
+            var bodyText = a.body ?? ""
+            for (k, v) in vars { bodyText = bodyText.replacingOccurrences(of: "{\(k)}", with: v) }
+            let apiURL = fill(a.url ?? episode.url, extra: vars)
+            let resp = try await HTTPClient.postForm(apiURL, body: bodyText,
+                                                     headers: ["Referer": referer, "X-Requested-With": "XMLHttpRequest"],
+                                                     referer: referer)
+            if let data = resp.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) {
+                raw = value(at: a.field ?? "url", in: obj)
+            }
         case "redirect":
             if let p = a.pattern {
                 let html = try await fetch(episode.url)
@@ -225,8 +253,18 @@ final class RuleSource: BookSource {
         if raw.isEmpty { throw SourceError.parse("按规则没取到音频地址") }
         var final = raw.absoluteURL(base: base)
         if let prefix = a.prefix { final = prefix + raw }
+        // 有些接口返回的地址里带中文（未编码），有些已经是 %XX —— 只对前者编码
+        final = percentEncodedIfNeeded(final)
         guard let url = URL(string: final) else { throw SourceError.badURL(final) }
         return url
+    }
+
+    /// 播放时带的请求头（CDN 防盗链）
+    func audioHeaders(for episode: Episode) -> [String: String] {
+        guard let a = rule.audio else { return [:] }
+        var h = a.headers ?? [:]
+        if h["Referer"] == nil { h["Referer"] = a.referer ?? base }
+        return h
     }
 
     func verificationURL(keyword: String) -> URL? {

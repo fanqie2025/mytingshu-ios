@@ -57,6 +57,22 @@ enum HTTPClient {
         return decode(data, gbk: gbk)
     }
 
+    /// POST 表单（application/x-www-form-urlencoded），返回文本
+    static func postForm(_ urlString: String,
+                         body: String,
+                         headers: [String: String] = [:],
+                         referer: String? = nil,
+                         gbk: Bool = false,
+                         mobile: Bool = false) async throws -> String {
+        var req = try request(urlString, headers: headers, referer: referer, mobile: mobile)
+        req.httpMethod = "POST"
+        req.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body.data(using: .utf8)
+        let (data, http) = try await session.data(for: req)
+        guard http.statusCode == 200 else { throw SourceError.http(http.statusCode, urlString) }
+        return decode(data, gbk: gbk)
+    }
+
     /// 跟随 302 取最终 URL
     static func resolveFinalURL(_ urlString: String, referer: String? = nil, mobile: Bool = true) async -> String {
         guard let url = URL(string: urlString) else { return urlString }
@@ -89,11 +105,14 @@ enum HTTPClient {
     // MARK: 解码
 
     static func decode(_ data: Data, gbk: Bool = false) -> String {
-        if !gbk, let s = String(data: data, encoding: .utf8) { return s }
+        // 有些接口（如 ting15 的播放接口）返回带 UTF-8 BOM，JSON 解析会被它搞挂，统一剥掉
+        var d = data
+        if d.count >= 3 && d[0] == 0xEF && d[1] == 0xBB && d[2] == 0xBF { d = d.subdata(in: 3..<d.count) }
+        if !gbk, let s = String(data: d, encoding: .utf8) { return s }
         let cf = CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)
         let enc = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cf))
-        if let s = String(data: data, encoding: enc) { return s }
-        return String(data: data, encoding: .utf8) ?? ""
+        if let s = String(data: d, encoding: enc) { return s }
+        return String(data: d, encoding: .utf8) ?? ""
     }
 
     // MARK: Cookie（供 WKWebView 验证码流程注入）
@@ -177,4 +196,13 @@ func anyString(_ v: Any?) -> String {
 /// 清洗接口返回的富文本（去标签 + 还原实体）
 func cleanText(_ v: Any?) -> String {
     anyString(v).htmlDecoded.strippedTags
+}
+
+/// 非 ASCII 的 URL 才需要百分号编码。
+/// 已经是百分号编码的（纯 ASCII）必须原样返回 —— 否则 % 会被二次编码成 %25，CDN 直接 404。
+func percentEncodedIfNeeded(_ s: String) -> String {
+    if s.allSatisfy({ $0.isASCII }) { return s }
+    var allowed = CharacterSet.alphanumerics
+    allowed.insert(charactersIn: "-._~:/?#[]@!$&'()*+,;=%")
+    return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
 }

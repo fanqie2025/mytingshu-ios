@@ -249,8 +249,25 @@ enum RuleExtractor {
             let name = accessor.dropFirst(5).dropLast()
             return (node.attr(String(name)) ?? "").htmlDecoded
         }
+        // @regex(模式) 或 @regex(模式,2)：在节点文本上跑正则
+        if accessor.hasPrefix("regex(") {
+            let inner = String(accessor.dropFirst(6).dropLast())
+            var pattern = inner
+            var group = 1
+            if let comma = inner.lastIndex(of: ","), let g = Int(inner[inner.index(after: comma)...].trimmingCharacters(in: .whitespaces)) {
+                group = g
+                pattern = String(inner[..<comma])
+            }
+            return node.allText.firstMatch(pattern, group: group) ?? ""
+        }
         // @href / @src / @title ... 直接当属性名
         return (node.attr(accessor) ?? "").htmlDecoded
+    }
+
+    /// 读 <meta name="x" content="y">
+    static func meta(_ name: String, in html: String) -> String {
+        html.firstMatch("<meta[^>]+name=\"\(name)\"[^>]*content=\"([^\"]*)\"") ??
+        html.firstMatch("<meta[^>]+content=\"([^\"]*)\"[^>]*name=\"\(name)\"") ?? ""
     }
 
     /// 用整页 HTML 跑正则取第一个分组

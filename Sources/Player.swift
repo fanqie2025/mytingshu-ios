@@ -19,6 +19,22 @@ final class PlayerEngine: ObservableObject {
     @Published var errorText: String?
     @Published var sleepDeadline: Date?
 
+    /// 跳过片头 / 片尾（秒），0 = 不跳过
+    @Published var skipIntro: Double {
+        didSet { UserDefaults.standard.set(skipIntro, forKey: "skip_intro_v1") }
+    }
+    @Published var skipOutro: Double {
+        didSet { UserDefaults.standard.set(skipOutro, forKey: "skip_outro_v1") }
+    }
+
+    /// 本集是否已经跳过片头（避免反复 seek）
+    private var appliedIntro = false
+
+    private init() {
+        skipIntro = UserDefaults.standard.double(forKey: "skip_intro_v1")
+        skipOutro = UserDefaults.standard.double(forKey: "skip_outro_v1")
+    }
+
     private var player: AVPlayer?
     private var timeObserver: Any?
     private var sleepTimer: Timer?
@@ -73,6 +89,7 @@ final class PlayerEngine: ObservableObject {
             player?.rate = rate
             duration = 0
             position = 0
+            appliedIntro = false
             if autoPlay { player?.play(); isPlaying = true } else { isPlaying = false }
             updateNowPlaying()
         } catch {
@@ -117,6 +134,23 @@ final class PlayerEngine: ObservableObject {
         if isPlaying { player?.rate = r }
     }
 
+    /// 跳过片头 / 片尾
+    private func applySkipRules(at seconds: Double) {
+        // 片头：每集只跳一次
+        if !appliedIntro {
+            if skipIntro > 1 && seconds < skipIntro {
+                appliedIntro = true
+                seek(to: skipIntro)
+                return
+            }
+            if seconds >= skipIntro || skipIntro <= 1 { appliedIntro = true }
+        }
+        // 片尾：剩得比设定值还少就进下一集
+        if skipOutro > 1, duration > skipOutro + 10, duration - seconds <= skipOutro, index + 1 < episodes.count {
+            next()
+        }
+    }
+
     func setSleep(minutes: Int?) {
         sleepTimer?.invalidate()
         sleepTimer = nil
@@ -150,6 +184,7 @@ final class PlayerEngine: ObservableObject {
             Task { @MainActor in
                 self.position = seconds
                 if let d = self.player?.currentItem?.duration.seconds, d.isFinite, d > 0 { self.duration = d }
+                self.applySkipRules(at: seconds)
                 self.updateNowPlaying()
             }
         }

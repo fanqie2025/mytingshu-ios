@@ -20,7 +20,17 @@ final class SourceStore: ObservableObject {
     ]
 
     var ruleSources: [any BookSource] { (bundled + imported).map { RuleSource(rule: $0) } }
-    var all: [any BookSource] { native + ruleSources }
+
+    /// 合并所有源并按 id 去重（原生源优先，其次打包规则，最后用户导入的）
+    var all: [any BookSource] {
+        var seen = Set<String>()
+        var out: [any BookSource] = []
+        for s in native + ruleSources where !seen.contains(s.id) {
+            seen.insert(s.id)
+            out.append(s)
+        }
+        return out
+    }
 
     private var dir: URL {
         let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]

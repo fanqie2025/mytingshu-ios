@@ -518,6 +518,18 @@ struct SettingsView: View {
                         Text("0.75x").tag(0.75); Text("1.0x").tag(1.0)
                         Text("1.25x").tag(1.25); Text("1.5x").tag(1.5); Text("2.0x").tag(2.0)
                     }
+                    Picker("跳过片头", selection: Binding(
+                        get: { Int(player.skipIntro) },
+                        set: { player.skipIntro = Double($0) })) {
+                        Text("不跳过").tag(0); Text("5 秒").tag(5); Text("10 秒").tag(10)
+                        Text("15 秒").tag(15); Text("30 秒").tag(30); Text("45 秒").tag(45); Text("60 秒").tag(60)
+                    }
+                    Picker("跳过片尾", selection: Binding(
+                        get: { Int(player.skipOutro) },
+                        set: { player.skipOutro = Double($0) })) {
+                        Text("不跳过").tag(0); Text("5 秒").tag(5); Text("10 秒").tag(10)
+                        Text("15 秒").tag(15); Text("30 秒").tag(30); Text("45 秒").tag(45); Text("60 秒").tag(60)
+                    }
                     Picker("定时关闭", selection: Binding(
                         get: { sleepTag },
                         set: { player.setSleep(minutes: $0 == 0 ? nil : $0) })) {

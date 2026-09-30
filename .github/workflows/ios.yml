@@ -10,7 +10,15 @@ permissions:
   contents: write
 
 jobs:
+  verify-sources:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 校验订阅书源（搜索→详情→章节→音频直链→音频可播）
+        run: python3 tools/verify_subscription.py sources/sources.json
+
   build:
+    needs: verify-sources
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4

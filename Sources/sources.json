@@ -1,0 +1,49 @@
+[
+  {
+    "id": "ting15",
+    "name": "有听网",
+    "host": "https://www.ting15.com",
+    "encoding": "utf-8",
+    "ua": "desktop",
+    "desc": "有听网：有声小说 / 评书 / 相声。搜索、分类、章节、播放全部实测可用（音频走 POST 接口 + Referer 防盗链）。",
+    "search": {
+      "url": "{host}/?s=ting-search-wd-{kw}.html",
+      "pageUrl": "{host}/?s=ting-search-wd-{kw}-p-{page}.html",
+      "list": ".category-list ul > li",
+      "title": ".info h4 > a@title",
+      "urlRule": ".info h4 > a@href",
+      "cover": ".img img@src",
+      "author": ".info@regex(作者：([^<]*))",
+      "artist": ".info@regex(播音：([^<]*))"
+    },
+    "categories": [
+      { "title": "武侠玄幻", "url": "{host}/wuxiaxuanhuan/", "group": "有声小说" },
+      { "title": "恐怖灵异", "url": "{host}/kongbulingyi/", "group": "有声小说" },
+      { "title": "推理悬疑", "url": "{host}/tuilixuanyi/", "group": "有声小说" },
+      { "title": "都市言情", "url": "{host}/dushiyanqing/", "group": "有声小说" },
+      { "title": "家庭伦理", "url": "{host}/jiatinglunli/", "group": "有声小说" },
+      { "title": "官场职场", "url": "{host}/wenxuemingzhu/", "group": "有声小说" },
+      { "title": "经典评书", "url": "{host}/jingdianpingshu/", "group": "评书曲艺" },
+      { "title": "曲艺戏曲", "url": "{host}/quyixiqu/", "group": "评书曲艺" },
+      { "title": "相声小品", "url": "{host}/xiangshengxiaopin/", "group": "评书曲艺" },
+      { "title": "助眠音频", "url": "{host}/yinyue/", "group": "其它" }
+    ],
+    "detail": {
+      "episodes": ".playlist .plist ul > li > a",
+      "episodeTitle": "@text",
+      "episodeUrl": "@href",
+      "intro": ".intro p@text",
+      "cover": ".bookinfo .bimg img@src",
+      "author": ".binfo@regex(作者：([^<]*))",
+      "artist": ".binfo@regex(播音：<span class=\"bys\">([^<]*))"
+    },
+    "audio": {
+      "type": "post",
+      "url": "{host}/?s=api-getneoplay",
+      "metaFrom": { "bookId": "_b", "isPay": "_p", "page": "_cp" },
+      "body": "bookId={bookId}&isPay={isPay}&page={page}",
+      "field": "url",
+      "referer": "{host}/"
+    }
+  }
+]
