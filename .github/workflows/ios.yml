@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: 校验订阅书源（搜索→详情→章节→音频直链→音频可播）
-        run: python3 tools/verify_subscription.py sources/sources.json
+        run: python3 tools/verify_subscription.py subscription/sources.json
 
   build:
     needs: verify-sources
@@ -46,3 +46,4 @@ jobs:
             构建号：${{ github.run_number }}
           files: build/MyTingShu.ipa
           make_latest: true
+

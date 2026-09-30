@@ -21,13 +21,13 @@
 `设置 → 导入书源 → 粘贴订阅地址`，填这条（仓库里的订阅文件，已用 `tools/verify_subscription.py` 全链路验证过）：
 
 ```
-https://cdn.jsdelivr.net/gh/fanqie2025/mytingshu-ios@main/sources/sources.json
+https://cdn.jsdelivr.net/gh/fanqie2025/mytingshu-ios@main/subscription/sources.json
 ```
 
 备用地址（jsDelivr 被墙时用）：
 
 ```
-https://raw.githubusercontent.com/fanqie2025/mytingshu-ios/main/sources/sources.json
+https://raw.githubusercontent.com/fanqie2025/mytingshu-ios/main/subscription/sources.json
 ```
 
 导入后源会自动打开，直接在「搜索」里用。也可以把书源 JSON 直接粘进同一个页面。
@@ -136,3 +136,4 @@ Sources/             Swift 源码
   UI.swift           界面
 Resources/           Info.plist + 图标
 ```
+
