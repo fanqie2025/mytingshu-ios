@@ -172,8 +172,10 @@ final class Ting29Source: BookSource {
 
     /// 求值 `mp3:` 后面的字符串拼接表达式（变量名每次随机，形态有 3 种）
     static func resolveMediaURL(_ html: String) -> String? {
-        let names = html.allMatches(#"var\s+([A-Za-z_][A-Za-z0-9_$]*)\s*=\s*['"]"#)
-        let values = html.allMatches(#"var\s+[A-Za-z_][A-Za-z0-9_$]*\s*=\s*['"]([^'"]*)['"]"#)
+        // 变量既有 `var x = '...'`，也有裸赋值 `x = '...'`（这站两种都用），都要收
+        let assignPattern = #"(?:var\s+)?([A-Za-z_][A-Za-z0-9_$]*)\s*=\s*['"]([^'"]*)['"]"#
+        let names = html.allMatches(assignPattern, group: 1)
+        let values = html.allMatches(assignPattern, group: 2)
         var vars: [String: String] = [:]
         for (i, n) in names.enumerated() where i < values.count { vars[n] = values[i] }
 
