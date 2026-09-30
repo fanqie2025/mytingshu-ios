@@ -47,6 +47,19 @@ jobs:
       - name: 编译并打包 IPA
         run: bash build_ipa.sh
 
+      - name: 产物自检（Mach-O 必须是合格的 iOS 可执行文件）
+        run: |
+          cd build
+          rm -rf ipa_check && mkdir ipa_check
+          unzip -o -q MyTingShu.ipa -d ipa_check
+          python3 ../tools/check_macho.py ipa_check/Payload/MyTingShu.app/MyTingShu | tee /tmp/macho.txt
+          grep -q "MH_EXECUTE" /tmp/macho.txt || { echo "不是可执行文件（可能是 dylib）"; exit 1; }
+          grep -q "arm64" /tmp/macho.txt || { echo "不是 arm64"; exit 1; }
+          grep -q "LC_MAIN" /tmp/macho.txt || { echo "缺入口点"; exit 1; }
+          test -f ipa_check/Payload/MyTingShu.app/Info.plist || { echo "缺 Info.plist"; exit 1; }
+          test -f ipa_check/Payload/MyTingShu.app/sources.json || { echo "缺内置书源"; exit 1; }
+          echo "产物自检通过"
+
       - name: 清理 jsDelivr 缓存（让订阅文件立刻生效）
         run: curl -s "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/subscription/sources.json" || true
 
