@@ -24,6 +24,21 @@
 	<string>15.0</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- 手写 .app bundle 时这几个「平台信息」字段必须补上，否则 iOS 可能装不上/起不来 -->
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>iPhoneOS</string>
+	</array>
+	<key>UIDeviceFamily</key>
+	<array>
+		<integer>1</integer>
+	</array>
+	<key>DTPlatformName</key>
+	<string>iphoneos</string>
+	<key>DTSDKName</key>
+	<string>iphoneos</string>
+	<key>UIStatusBarStyle</key>
+	<string>UIStatusBarStyleDefault</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIBackgroundModes</key>

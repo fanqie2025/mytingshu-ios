@@ -647,64 +647,131 @@ struct SettingsView: View {
 
 // MARK: - 播放页
 
+// MARK: - 播放页（仿安卓版布局：集名 → 大封面 → 工具行 → 进度 → 15秒/上一集/播放/下一集/15秒）
+
 struct PlayerView: View {
     @ObservedObject var player = PlayerEngine.shared
     @Environment(\.dismiss) private var dismiss
+    @State private var showEpisodes = false
+    @State private var showSkip = false
 
     var body: some View {
         NavigationView {
-            VStack(spacing: 18) {
-                Spacer(minLength: 8)
+            VStack(spacing: 14) {
+                // 集名（上）＋ 书名（下）
+                VStack(spacing: 4) {
+                    Text(player.currentEpisode?.title ?? "未在播放")
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                    if let b = player.book {
+                        Text(b.title).font(.caption).foregroundColor(.secondary).lineLimit(1)
+                    }
+                }
+                .padding(.top, 6)
+                .padding(.horizontal)
+
+                if let err = player.errorText {
+                    Text(err).font(.caption).foregroundColor(.red).lineLimit(3).padding(.horizontal)
+                }
+
+                // 大封面
                 AsyncImage(url: URL(string: player.book?.cover ?? "")) { img in
                     img.resizable().aspectRatio(contentMode: .fit)
-                } placeholder: { Color(.secondarySystemBackground) }
-                .frame(maxWidth: 300, maxHeight: 300)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-
-                VStack(spacing: 4) {
-                    Text(player.book?.title ?? "").font(.headline).lineLimit(1)
-                    Text(player.currentEpisode?.title ?? "").font(.subheadline).foregroundColor(.secondary).lineLimit(1)
-                }
-
-                if let err = player.errorText { Text(err).font(.caption).foregroundColor(.red) }
-
-                Slider(value: Binding(get: { player.position }, set: { player.seek(to: $0) }),
-                       in: 0...max(player.duration, 1))
-                HStack {
-                    Text(timeText(player.position)).font(.caption2).monospacedDigit()
-                    Spacer()
-                    Text(timeText(player.duration)).font(.caption2).monospacedDigit()
-                }
-
-                HStack(spacing: 34) {
-                    Button { player.previous() } label: { Image(systemName: "backward.end.fill").font(.title) }
-                    Button { player.toggle() } label: {
-                        Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 64))
+                } placeholder: {
+                    ZStack {
+                        Color(.secondarySystemBackground)
+                        Image(systemName: "music.note").font(.system(size: 44)).foregroundColor(.secondary)
                     }
-                    Button { player.next() } label: { Image(systemName: "forward.end.fill").font(.title) }
+                }
+                .frame(maxWidth: 320, maxHeight: 320)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+
+                Spacer(minLength: 0)
+
+                // 工具行：定时 / 倍速 / 列表 / 片头片尾（原版那格「每日抽奖」已去掉）
+                HStack(spacing: 0) {
+                    Menu {
+                        Button("不打开定时") { player.setSleep(minutes: nil) }
+                        Button("15 分钟") { player.setSleep(minutes: 15) }
+                        Button("30 分钟") { player.setSleep(minutes: 30) }
+                        Button("60 分钟") { player.setSleep(minutes: 60) }
+                    } label: { toolLabel("timer", sleepTitle) }
+
+                    Menu {
+                        ForEach(rateOptions) { opt in
+                            Button(opt.label) { player.setRate(opt.value) }
+                        }
+                    } label: { toolLabel("speedometer", rateLabel(player.rate)) }
+
+                    Button { showEpisodes = true } label: { toolLabel("list.bullet", "列表") }
+                    Button { showSkip = true } label: { toolLabel("arrow.right.to.line", "片头片尾") }
                 }
                 .buttonStyle(.plain)
+                .foregroundColor(.primary)
+                .padding(.vertical, 4)
 
-                HStack(spacing: 24) {
-                    Picker("倍速", selection: Binding(get: { Double(player.rate) }, set: { player.setRate(Float($0)) })) {
-                        Text("0.75x").tag(0.75); Text("1.0x").tag(1.0)
-                        Text("1.25x").tag(1.25); Text("1.5x").tag(1.5); Text("2.0x").tag(2.0)
-                    }
-                    .pickerStyle(.menu)
-                    if let d = player.sleepDeadline {
-                        Text("定时 \(max(0, Int(d.timeIntervalSinceNow / 60))) 分")
-                            .font(.caption).foregroundColor(.orange)
-                            .onTapGesture { player.setSleep(minutes: nil) }
+                // 进度
+                VStack(spacing: 2) {
+                    Slider(value: Binding(get: { min(player.position, max(player.duration, 1)) },
+                                          set: { player.seek(to: $0) }),
+                           in: 0...max(player.duration, 1))
+                    HStack {
+                        Text(timeText(player.position)).font(.caption).monospacedDigit()
+                        Spacer()
+                        Text(timeText(player.duration)).font(.caption).monospacedDigit()
                     }
                 }
-                Spacer()
+                .padding(.horizontal)
+
+                // 播放控制
+                HStack(spacing: 30) {
+                    Button { player.skip(-15) } label: {
+                        Image(systemName: "gobackward.15").font(.system(size: 26))
+                    }
+                    Button { player.previous() } label: {
+                        Image(systemName: "backward.end.fill").font(.system(size: 28))
+                    }
+                    Button { player.toggle() } label: {
+                        Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 72))
+                    }
+                    Button { player.next() } label: {
+                        Image(systemName: "forward.end.fill").font(.system(size: 28))
+                    }
+                    Button { player.skip(15) } label: {
+                        Image(systemName: "goforward.15").font(.system(size: 26))
+                    }
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 10)
             }
-            .padding()
-            .navigationTitle("正在播放")
+            .padding(.horizontal, 8)
+            .navigationTitle(player.book?.title ?? "正在播放")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("收起") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("收起") { dismiss() } }
+            }
+            .sheet(isPresented: $showEpisodes) { EpisodeListSheet() }
+            .sheet(isPresented: $showSkip) { SkipSettingsSheet() }
         }
+    }
+
+    private func toolLabel(_ icon: String, _ title: String) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 21))
+            Text(title).font(.caption2)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func rateLabel(_ r: Float) -> String {
+        rateOptions.first { abs($0.value - r) < 0.01 }?.label ?? String(format: "%.2fx", r)
+    }
+
+    private var sleepTitle: String {
+        guard let d = player.sleepDeadline else { return "定时" }
+        return "\(max(0, Int(d.timeIntervalSinceNow / 60)))分"
     }
 
     private func timeText(_ s: Double) -> String {
@@ -713,3 +780,87 @@ struct PlayerView: View {
         return String(format: "%02d:%02d", t / 60, t % 60)
     }
 }
+
+// MARK: - 章节列表
+
+struct EpisodeListSheet: View {
+    @ObservedObject var player = PlayerEngine.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationView {
+            List {
+                ForEach(player.episodes.indices, id: \.self) { i in
+                    Button {
+                        if let book = player.book {
+                            player.play(book: book, episodes: player.episodes, startAt: i)
+                        }
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Text("\(i + 1). " + (player.episodes[i].title.isEmpty ? "第 \(i + 1) 集" : player.episodes[i].title))
+                                .font(.subheadline).lineLimit(1)
+                            Spacer()
+                            if i == player.index {
+                                Image(systemName: "speaker.wave.2.fill").foregroundColor(.orange)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .navigationTitle("章节（\(player.episodes.count)）")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("关闭") { dismiss() } } }
+        }
+    }
+}
+
+// MARK: - 片头片尾设置
+
+struct SkipSettingsSheet: View {
+    @ObservedObject var player = PlayerEngine.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("自动跳过") {
+                    Picker("片头", selection: Binding(get: { Int(player.skipIntro) },
+                                                     set: { player.skipIntro = Double($0) })) {
+                        Text("不跳过").tag(0); Text("5 秒").tag(5); Text("10 秒").tag(10)
+                        Text("15 秒").tag(15); Text("30 秒").tag(30); Text("45 秒").tag(45); Text("60 秒").tag(60)
+                    }
+                    Picker("片尾", selection: Binding(get: { Int(player.skipOutro) },
+                                                     set: { player.skipOutro = Double($0) })) {
+                        Text("不跳过").tag(0); Text("5 秒").tag(5); Text("10 秒").tag(10)
+                        Text("15 秒").tag(15); Text("30 秒").tag(30); Text("45 秒").tag(45); Text("60 秒").tag(60)
+                    }
+                }
+                Section {
+                    Text("每集开始时会自动跳过设定的「片头」秒数；播放到离结尾还剩「片尾」秒数时，自动进入下一集。")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("片头片尾")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        }
+    }
+}
+
+// MARK: - 倍速选项（播放页与设置共用）
+
+struct RateOption: Identifiable {
+    var id: Float { value }
+    let value: Float
+    let label: String
+}
+
+let rateOptions: [RateOption] = [
+    RateOption(value: 0.75, label: "0.75x"),
+    RateOption(value: 1.0, label: "1.0x"),
+    RateOption(value: 1.25, label: "1.25x"),
+    RateOption(value: 1.5, label: "1.5x"),
+    RateOption(value: 2.0, label: "2.0x")
+]

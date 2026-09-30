@@ -44,29 +44,44 @@ def text_of(html):
 
 
 def select_items(html, container):
-    """极简选择器：'a > b' / 'a b' 两级 + 末级 tag，支持 [attr*=值] 过滤。"""
-    parts = [p.strip() for p in re.split(r"\s*>\s*", container) if p.strip()]
-    tag = parts[-1]
+    """极简选择器（与 iOS 端 MiniHTML 行为对齐）：
+    'a b' 后代 / 'a > b' 子代 / .class / #id / tag / [attr*=值]。
+    做法：用第一个选择器定位范围，再在范围里取末级 tag 的元素。"""
+    toks = [p for p in re.split(r"\s+", container.strip()) if p and p != ">"]
+    if not toks:
+        return []
+    first, last = toks[0], toks[-1]
+
+    # 范围锚点
+    m_tag = re.match(r"([a-zA-Z0-9]+)?", first)
+    ftag = m_tag.group(1) or "div"
+    conds = []
+    cid = re.search(r"#([\w-]+)", first)
+    ccls = re.search(r"\.([\w-]+)", first)
+    if cid:
+        conds.append(("id", cid.group(1)))
+    if ccls:
+        conds.append(("class", ccls.group(1)))
+    body = html
+    for m in re.finditer(r"<%s\b[^>]*>" % ftag, html):
+        seg = m.group(0)
+        if all(re.search(r'%s="[^"]*%s' % (k, re.escape(v)), seg) for k, v in conds):
+            body = html[m.end():]
+            break
+    ul = re.search(r"<ul[^>]*>([\s\S]*?)</ul>", body)
+    if ul:
+        body = ul.group(1)
+
+    # 末级 tag + 属性过滤
     attr_filter = None
-    m_attr = re.search(r"\[([\w-]+)\*=\s*([^\]]+)\]", tag)
-    if m_attr:
-        attr_filter = (m_attr.group(1), m_attr.group(2))
-        tag = tag[:m_attr.start()]
-    tag = tag.strip() or "a"
-    if len(parts) >= 2:
-        first = parts[0]
-        m = re.match(r"([a-zA-Z0-9]+)?(?:\.([\w-]+))?", first)
-        ftag = (m.group(1) or "div") if m else "div"
-        fcls = m.group(2) if m else None
-        if fcls:
-            anchor = re.search(r"<%s[^>]*class=\"[^\"]*%s[^\"]*\"[^>]*>" % (ftag, re.escape(fcls)), html)
-        else:
-            anchor = re.search(r"<%s[^>]*>" % ftag, html)
-        if anchor:
-            rest = html[anchor.end():]
-            ul = re.search(r"<ul[^>]*>([\s\S]*?)</ul>", rest)
-            html = ul.group(1) if ul else rest[:200000]
-    items = re.findall(r"<%s[^>]*>[\s\S]*?</%s>" % (tag, tag), html)
+    mm = re.search(r"\[([\w-]+)\*=\s*([^\]]+)\]", last)
+    if mm:
+        attr_filter = (mm.group(1), mm.group(2))
+        last = last[:mm.start()]
+    tm = re.match(r"([a-zA-Z0-9]+)", last.strip())
+    tag = tm.group(1) if tm else "a"
+
+    items = re.findall(r"<%s\b[^>]*>[\s\S]*?</%s>" % (tag, tag), body)
     if attr_filter:
         name, val = attr_filter
         items = [i for i in items if re.search(r'%s="[^"]*%s' % (re.escape(name), re.escape(val)), i[:400])]
@@ -144,10 +159,10 @@ def check_one(rule):
         except Exception as e:
             print("  [WARN] ⓪ 预热失败：%s" % e)
 
-    # ① 搜索
+    # ① 搜索（searchable=false 的源跳过，改用分类页取书）
     sr = rule.get("search")
     books = []
-    if sr:
+    if sr and rule.get("searchable", True) is not False:
         url = fill(sr["url"], host, kw="三体", page=1)
         html = fetch(url, referer=host + "/", ua=ua)[0].decode("utf-8", "replace")
         items = select_items(html, sr["list"])
@@ -163,16 +178,28 @@ def check_one(rule):
         else:
             print("  [FAIL] ① 搜索没解析出条目"); ok_all = False
     else:
-        print("  [SKIP] ① 该源没有搜索规则")
+        print("  [SKIP] ① 该源不搜索（searchable=false）")
 
-    # ② 分类
+    # ② 分类（顺便在没搜索时用分类页取书）
     cats = rule.get("categories") or []
     if cats:
         url = fill(cats[0]["url"], host)
         html = fetch(url, referer=host + "/", ua=ua)[0].decode("utf-8", "replace")
         items = select_items(html, (sr or {}).get("list", "")) if sr else []
-        print("  [%s]   ② 分类「%s」→ %d 条" % ("OK" if items else "FAIL", cats[0]["title"], len(items)))
-        ok_all = ok_all and bool(items)
+        if items:
+            print("  [OK]   ② 分类「%s」→ %d 条" % (cats[0]["title"], len(items)))
+        else:
+            print("  [FAIL] ② 分类「%s」没解析出条目" % cats[0]["title"]); ok_all = False
+        if not books:
+            for it in items:
+                t = pick(it, sr["title"])
+                u = pick(it, sr.get("urlRule") or sr["title"].replace("@text", "@href"))
+                if t and u:
+                    books.append({"title": t, "url": u if u.startswith("http") else host.rstrip("/") + u,
+                                  "cover": pick(it, sr["cover"]) if sr and sr.get("cover") else "",
+                                  "artist": ""})
+            if books:
+                print("       （用分类页取到 %d 本，第一条《%s》）" % (len(books), books[0]["title"]))
     else:
         print("  [SKIP] ② 无分类")
 

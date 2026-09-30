@@ -129,6 +129,13 @@ final class PlayerEngine: ObservableObject {
         position = seconds
     }
 
+    /// 快进/快退（秒），负数=后退
+    func skip(_ seconds: Double) {
+        let upper = duration > 1 ? duration - 1 : position + abs(seconds)
+        let target = max(0, min(position + seconds, upper))
+        seek(to: target)
+    }
+
     func setRate(_ r: Float) {
         rate = r
         if isPlaying { player?.rate = r }

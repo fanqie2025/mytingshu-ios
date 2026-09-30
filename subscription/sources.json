@@ -71,5 +71,37 @@
       "type": "regex",
       "pattern": "url:\\s*\"((?:[^\"\\\\]|\\\\.)*?\\.(?:m4a|mp3)(?:[^\"\\\\]|\\\\.)*)\""
     }
+  },
+  {
+    "id": "pingshu5",
+    "name": "单田芳评书网",
+    "host": "http://www.pingshu5.net",
+    "encoding": "utf-8",
+    "searchable": false,
+    "desc": "单田芳评书网：全是评书（83 本，含 400 回的白眉大侠）。站方搜索硬限流 3 秒且结果很局限，所以本源只走「书源」页分类浏览；音频是静态直链，零门槛。",
+    "search": {
+      "url": "{host}/plus/search.php?kwtype=0&q={kw}",
+      "list": "div.pop-books2 li",
+      "title": "h5.pop-tit@text",
+      "urlRule": "a@href",
+      "cover": "img@src"
+    },
+    "categories": [
+      { "title": "评书", "url": "{host}/pbook/", "group": "评书" },
+      { "title": "有声书", "url": "{host}/ykc/", "group": "评书" },
+      { "title": "朗读", "url": "{host}/llr/", "group": "评书" }
+    ],
+    "detail": {
+      "episodes": "div.book-list > ul > li > a",
+      "episodeTitle": "@text",
+      "episodeUrl": "@href",
+      "cover": "img.media-object@src",
+      "author": "h3.media-heading@text",
+      "intro": "div.book-list@text"
+    },
+    "audio": {
+      "type": "regex",
+      "pattern": "<source[^>]+src=\"([^\"]+)\""
+    }
   }
 ]
