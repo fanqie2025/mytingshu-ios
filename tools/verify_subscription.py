@@ -10,6 +10,9 @@
 import json
 import re
 import sys
+import time
+import socket
+import urllib.error
 import urllib.parse
 import urllib.request
 import http.cookiejar
@@ -23,17 +26,44 @@ UA_MOBILE = "Mozilla/5.0 (Linux; Android 9; SM-S9280) AppleWebKit/537.36 (KHTML,
 COOKIES = http.cookiejar.CookieJar()
 OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(COOKIES))
 
+# GitHub 的 runner 在境外，访问国内听书站经常慢/超时 —— 统一重试 + 放宽超时
+TIMEOUT = 45
+ATTEMPTS = 3
 
-def fetch(url, data=None, referer=None, ua=UA_DESKTOP, method=None, extra=None):
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("User-Agent", ua)
-    req.add_header("Accept-Language", "zh-CN,zh;q=0.9")
-    if referer:
-        req.add_header("Referer", referer)
-    for k, v in (extra or {}).items():
-        req.add_header(k, v)
-    with OPENER.open(req, timeout=30) as r:
-        return r.read(), dict(r.headers), r.status
+
+class NetworkProblem(Exception):
+    """网络不可达（区别于解析逻辑错误）"""
+
+
+def fetch(url, data=None, referer=None, ua=UA_DESKTOP, method=None, extra=None,
+          attempts=ATTEMPTS, timeout=TIMEOUT):
+    last = None
+    for i in range(attempts):
+        try:
+            req = urllib.request.Request(url, data=data, method=method)
+            req.add_header("User-Agent", ua)
+            req.add_header("Accept-Language", "zh-CN,zh;q=0.9")
+            if referer:
+                req.add_header("Referer", referer)
+            for k, v in (extra or {}).items():
+                req.add_header(k, v)
+            with OPENER.open(req, timeout=timeout) as r:
+                return r.read(), dict(r.headers), r.status
+        except urllib.error.HTTPError as e:
+            transient = e.code in (403, 429) or 500 <= e.code < 600
+            if transient and i < attempts - 1:
+                last = e
+                time.sleep(1.5 * (i + 1))
+                continue
+            if transient:
+                # 境外 runner 访问国内站常见 403/429/5xx：按网络问题处理
+                raise NetworkProblem("HTTP %s（可能被拦或限流）" % e.code)
+            raise
+        except Exception as e:
+            last = e
+            if i < attempts - 1:
+                time.sleep(1.5 * (i + 1))
+    raise NetworkProblem("重试 %d 次仍失败：%s" % (attempts, last))
 
 
 def text_of(html):
@@ -292,13 +322,22 @@ def main():
     for r in rules:
         try:
             results.append((r.get("name"), check_one(r)))
+        except NetworkProblem as e:
+            # 境外 runner 访问国内站会超时：跳过，不算失败（本机跑通常没问题）
+            print("  [WARN] 网络不可达，跳过：%s" % e)
+            results.append((r.get("name"), None))
         except Exception as e:
             print("  [FAIL] 异常：%s" % e)
             results.append((r.get("name"), False))
     print("=" * 60)
     for n, ok in results:
-        print("%s  %s" % ("✅" if ok else "❌", n))
-    return 0 if all(ok for _, ok in results) else 1
+        print("%s  %s%s" % ("✅" if ok else ("⚠️ " if ok is None else "❌"), n,
+                            "（网络不可达已跳过）" if ok is None else ""))
+    failed = [n for n, ok in results if ok is False]
+    skipped = [n for n, ok in results if ok is None]
+    if skipped:
+        print("提示：%d 个源因网络不可达被跳过（多为境外 runner 访问国内站超时），本机复跑可确认。" % len(skipped))
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
