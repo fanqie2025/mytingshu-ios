@@ -22,7 +22,8 @@ final class SourceStore: ObservableObject {
                     desc: "爱听书（六千多本）。列表用手机 UA、章节目录与播放页用桌面 UA；音频走签名接口，遇限流会自动换新签名重试。"),
         PtcmsSource(id: "ting13", name: "13听书网", host: "https://www.ting13.cc",
                     dirPrefix: "/tingdirs/",
-                    desc: "13听书网（与爱听书同一个书库）。")
+                    desc: "13听书网（与爱听书同一个书库）。"),
+        LetingSource()
     ]
 
     /// 合并所有源并按 id 去重，优先级：原生源 > 订阅导入的 > 内置打包的

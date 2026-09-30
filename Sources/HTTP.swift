@@ -74,6 +74,47 @@ enum HTTPClient {
         return decode(data, gbk: gbk)
     }
 
+    /// POST JSON（有些站要 application/json + X-Requested-With）
+    static func postJSON(_ urlString: String,
+                         json: String,
+                         headers: [String: String] = [:],
+                         referer: String? = nil,
+                         mobile: Bool = true) async throws -> String {
+        var req = try request(urlString, headers: headers, referer: referer, mobile: mobile)
+        req.httpMethod = "POST"
+        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        req.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
+        req.httpBody = json.data(using: .utf8)
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw SourceError.message("无 HTTP 响应") }
+        guard http.statusCode == 200 else { throw SourceError.http(http.statusCode, urlString) }
+        return decode(data)
+    }
+
+    /// 解「反转 + base64」型 JS 挑战，取里面要写的 cookie 值。
+    /// 支持两种写法：`cookieName=<值>;` 或 `cookieName=' + encodeURIComponent(token)`（token 是同段脚本里的变量）
+    static func solveGuardToken(_ html: String, cookieName: String) -> String? {
+        guard let raw = html.firstMatch(#"var\s+reversed\s*=\s*"([^"]+)""#) else { return nil }
+        let forward = String(raw.reversed())
+        let padded = forward + String(repeating: "=", count: (4 - forward.count % 4) % 4)
+        guard let data = Data(base64Encoded: padded, options: .ignoreUnknownCharacters),
+              let js = String(data: data, encoding: .utf8) else { return nil }
+        // 1) cookie 直接内联写法（token 可能是 base64，含 + / =，所以只排除分隔符）
+        if let v = js.firstMatch(#"\#(cookieName)=([^;'" ]{6,})"#) { return v }
+        // 2) token 变量写法（脚本里先定义 token，再用 encodeURIComponent 拼 cookie）
+        for pattern in [#"var\s+token\s*=\s*['"]([^'"]+)['"]"#, #"\btoken\s*=\s*['"]([^'"]+)['"]"#] {
+            if let v = js.firstMatch(pattern) { return v }
+        }
+        return nil
+    }
+
+    /// 写一个 cookie 到共享存储（供后续请求带上）
+    static func setCookie(name: String, value: String, host: String) {
+        guard let h = URL(string: host)?.host else { return }
+        let props: [HTTPCookiePropertyKey: Any] = [.domain: h, .path: "/", .name: name, .value: value]
+        if let c = HTTPCookie(properties: props) { HTTPCookieStorage.shared.setCookie(c) }
+    }
+
     /// 跟随 302 取最终 URL
     static func resolveFinalURL(_ urlString: String, referer: String? = nil, mobile: Bool = true) async -> String {
         guard let url = URL(string: urlString) else { return urlString }
