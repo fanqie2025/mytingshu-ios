@@ -251,8 +251,15 @@ struct SearchView: View {
         await withTaskGroup(of: (any BookSource, Result<[Book], Error>).self) { group in
             for s in sources {
                 group.addTask {
-                    do { return (s, .success(try await s.search(keyword: kw, page: 1))) }
-                    catch { return (s, .failure(error)) }
+                    do {
+                        // 单个源最多等 20 秒，避免卡住的源拖住整个搜索
+                        let books = try await withTimeout(seconds: 20) {
+                            try await s.search(keyword: kw, page: 1)
+                        }
+                        return (s, .success(books))
+                    } catch {
+                        return (s, .failure(error))
+                    }
                 }
             }
             for await (s, r) in group {

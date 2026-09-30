@@ -225,6 +225,22 @@ extension Optional where Wrapped == String {
     var orEmpty: String { self ?? "" }
 }
 
+/// 给任意 async 操作套一个超时（避免某个源卡住拖垮整体）
+func withTimeout<T>(seconds: Double, operation: @escaping () async throws -> T) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await operation() }
+        group.addTask {
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            throw SourceError.message("超时（\(Int(seconds)) 秒没有响应）")
+        }
+        defer { group.cancelAll() }
+        guard let first = try await group.next() else {
+            throw SourceError.message("没有结果")
+        }
+        return first
+    }
+}
+
 /// 任意 JSON 值 → String（数字/布尔也能转）
 func anyString(_ v: Any?) -> String {
     switch v {
