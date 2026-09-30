@@ -54,7 +54,11 @@ final class Ting55Source: BookSource {
                 ?? HTMLNode.select("img", in: [a]).first?.attr("data-original") ?? ""
             var artist = HTMLNode.select("span.bys", in: [a]).first?.allText.strippedTags ?? ""
             if artist.isEmpty { artist = HTMLNode.select("a.by", in: [a]).first?.allText.strippedTags ?? "" }
-            books.append(Book(sourceId: id, title: title, artist: artist,
+            // 这站的条目里作者/播音在 <p> 文本里
+            if artist.isEmpty { artist = a.allText.firstMatch(#"播音：([^<\s]{1,20})"#) ?? "" }
+            var author = a.allText.firstMatch(#"作者：([^<\s]{1,20})"#) ?? ""
+            if author == "佚名" { author = "" }
+            books.append(Book(sourceId: id, title: title, author: author, artist: artist,
                               cover: cover.absoluteURL(base: host), bookURL: href.absoluteURL(base: host)))
         }
         return books
