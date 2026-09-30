@@ -103,9 +103,9 @@ final class PlayerEngine: ObservableObject {
             if autoPlay { player?.play(); isPlaying = true } else { isPlaying = false }
             updateNowPlaying()
 
-            // 自动缓存后面几集
+            // 自动缓存后面几集（book 已在方法开头 guard 出来）
             let prefetchCount = CacheManager.shared.autoCacheNext
-            if prefetchCount > 0, let book, localURL == nil {
+            if prefetchCount > 0, localURL == nil {
                 let list = episodes
                 let from = index
                 Task { await CacheManager.shared.prefetch(book: book, episodes: list, from: from, count: prefetchCount) }
