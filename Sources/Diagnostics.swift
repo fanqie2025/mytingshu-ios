@@ -58,7 +58,7 @@ final class Diagnostics: ObservableObject {
             var log = ""
             do {
                 let books = try await withTimeout(seconds: 25) {
-                    try await s.search(keyword: keyword, page: 1)
+                    try await s.search(keyword: self.keyword, page: 1)
                 }
                 log += "搜索 \(books.count) 条"
                 guard let b = books.first else {
