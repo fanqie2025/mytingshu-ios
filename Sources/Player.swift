@@ -29,6 +29,11 @@ final class PlayerEngine: ObservableObject {
         didSet { UserDefaults.standard.set(skipOutro, forKey: "skip_outro_v1") }
     }
 
+    /// 听完当前这一集就停（不自动续下一集）
+    @Published var stopAfterEpisode: Bool {
+        didSet { UserDefaults.standard.set(stopAfterEpisode, forKey: "stop_after_episode_v1") }
+    }
+
     /// 本集是否已经跳过片头（避免反复 seek）
     private var appliedIntro = false
 
@@ -36,6 +41,7 @@ final class PlayerEngine: ObservableObject {
         rate = UserDefaults.standard.object(forKey: "rate_v1") as? Float ?? 1.0
         skipIntro = UserDefaults.standard.double(forKey: "skip_intro_v1")
         skipOutro = UserDefaults.standard.double(forKey: "skip_outro_v1")
+        stopAfterEpisode = UserDefaults.standard.bool(forKey: "stop_after_episode_v1")
     }
 
     private var player: AVPlayer?
@@ -216,7 +222,16 @@ final class PlayerEngine: ObservableObject {
         NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
                                                object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
-            Task { @MainActor in self.next() }
+            Task { @MainActor in
+                if self.stopAfterEpisode {
+                    self.stopAfterEpisode = false
+                    self.player?.pause()
+                    self.isPlaying = false
+                    self.updateNowPlaying()
+                    return
+                }
+                self.next()
+            }
         }
         let center = MPRemoteCommandCenter.shared()
         center.playCommand.addTarget { [weak self] _ in

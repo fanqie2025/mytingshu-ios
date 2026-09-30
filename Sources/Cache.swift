@@ -104,4 +104,25 @@ final class CacheManager: ObservableObject {
             await cache(episode: episodes[i], source: src)
         }
     }
+
+    /// 整本缓存进度（nil = 没在跑）
+    @Published private(set) var batchDone: Int = 0
+    @Published private(set) var batchTotal: Int = 0
+    @Published private(set) var batching: Bool = false
+
+    /// 把整本书全部章节缓存到本地
+    func cacheAll(book: Book, episodes: [Episode]) async {
+        guard !batching, !episodes.isEmpty else { return }
+        guard let src = SourceStore.shared.all.first(where: { $0.id == book.sourceId }) else { return }
+        batching = true
+        batchTotal = episodes.count
+        batchDone = 0
+        for ep in episodes {
+            if !cachedKeys.contains(key(ep.url)) {
+                await cache(episode: ep, source: src)
+            }
+            batchDone += 1
+        }
+        batching = false
+    }
 }

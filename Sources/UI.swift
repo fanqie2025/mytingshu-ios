@@ -686,6 +686,7 @@ struct PlayerView: View {
     @State private var showSkip = false
     @State private var showRate = false
     @State private var showSleep = false
+    @State private var showInfo = false
 
     var body: some View {
         NavigationView {
@@ -728,6 +729,10 @@ struct PlayerView: View {
                         Button("15 分钟") { player.setSleep(minutes: 15) }
                         Button("30 分钟") { player.setSleep(minutes: 30) }
                         Button("60 分钟") { player.setSleep(minutes: 60) }
+                        Button("听完本集停止") {
+                            player.setSleep(minutes: nil)
+                            player.stopAfterEpisode = true
+                        }
                         Button("自定义…") { showSleep = true }
                     } label: { toolLabel("timer", sleepTitle) }
 
@@ -780,11 +785,13 @@ struct PlayerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("收起") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("详情") { showInfo = true } }
             }
             .sheet(isPresented: $showEpisodes) { EpisodeListSheet() }
             .sheet(isPresented: $showSkip) { SkipSettingsSheet() }
             .sheet(isPresented: $showRate) { RateSheet() }
             .sheet(isPresented: $showSleep) { SleepSheet() }
+            .sheet(isPresented: $showInfo) { BookInfoSheet() }
         }
     }
 
@@ -805,6 +812,74 @@ struct PlayerView: View {
         guard s.isFinite, s > 0 else { return "00:00" }
         let t = Int(s)
         return String(format: "%02d:%02d", t / 60, t % 60)
+    }
+}
+
+// MARK: - 书籍详情（播放页右上角「详情」）
+
+struct BookInfoSheet: View {
+    @ObservedObject var player = PlayerEngine.shared
+    @ObservedObject var cache = CacheManager.shared
+    @ObservedObject var library = LibraryStore.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationView {
+            List {
+                if let b = player.book {
+                    Section {
+                        HStack(alignment: .top, spacing: 12) {
+                            AsyncImage(url: URL(string: b.cover)) { img in
+                                img.resizable().aspectRatio(contentMode: .fill)
+                            } placeholder: { Color(.secondarySystemBackground) }
+                            .frame(width: 88, height: 118)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(b.title).font(.headline)
+                                if !b.artist.isEmpty { Text("播音：\(b.artist)").font(.caption) }
+                                if !b.author.isEmpty { Text("作者：\(b.author)").font(.caption) }
+                                Text("共 \(player.episodes.count) 集").font(.caption).foregroundColor(.secondary)
+                                Text("当前第 \(player.index + 1) 集").font(.caption2).foregroundColor(.secondary)
+                            }
+                        }
+                    }
+
+                    if !b.intro.isEmpty {
+                        Section("简介") { Text(b.intro).font(.caption) }
+                    }
+
+                    Section("操作") {
+                        Button {
+                            library.toggleFavorite(b)
+                        } label: {
+                            Label(library.isFavorite(b) ? "取消收藏" : "收藏这本书",
+                                  systemImage: library.isFavorite(b) ? "heart.fill" : "heart")
+                        }
+
+                        Button {
+                            Task { await cache.cacheAll(book: b, episodes: player.episodes) }
+                        } label: {
+                            if cache.batching {
+                                Label("缓存中 \(cache.batchDone)/\(cache.batchTotal)", systemImage: "arrow.down.circle")
+                            } else {
+                                Label("缓存整本（\(player.episodes.count) 集）", systemImage: "arrow.down.circle")
+                            }
+                        }
+                        .disabled(cache.batching || player.episodes.isEmpty)
+
+                        if cache.batching {
+                            ProgressView(value: Double(cache.batchDone), total: Double(max(cache.batchTotal, 1)))
+                        }
+                    }
+                } else {
+                    Text("还没有在播放的书").foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("书籍详情")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("关闭") { dismiss() } } }
+        }
     }
 }
 
@@ -954,6 +1029,13 @@ struct SleepSheet: View {
                             dismiss()
                         }
                     }
+                }
+                Section {
+                    Toggle("听完本集后停止", isOn: Binding(
+                        get: { player.stopAfterEpisode },
+                        set: { player.stopAfterEpisode = $0 }))
+                    Text("打开后：当前这集播完就暂停，不会自动续下一集（适合睡前听一集）。")
+                        .font(.caption).foregroundColor(.secondary)
                 }
                 Section {
                     Text("到点会自动暂停播放（App 在后台也会生效）。").font(.caption).foregroundColor(.secondary)
