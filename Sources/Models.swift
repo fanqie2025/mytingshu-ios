@@ -60,6 +60,9 @@ protocol BookSource: AnyObject, Identifiable {
     func detail(for book: Book) async throws -> BookDetail
     func audioURL(for episode: Episode) async throws -> URL
 
+    /// 播放这个源的音频时需要的额外请求头（不少站的 CDN 有 Referer 防盗链）
+    func audioHeaders(for episode: Episode) -> [String: String]
+
     /// 需要验证时的验证页地址
     func verificationURL(keyword: String) -> URL?
 }
@@ -71,6 +74,7 @@ extension BookSource {
     var desc: String { "" }
     func menus() async throws -> [CategoryMenu] { [] }
     func books(in category: SourceCategory, page: Int) async throws -> [Book] { [] }
+    func audioHeaders(for episode: Episode) -> [String: String] { [:] }
     func verificationURL(keyword: String) -> URL? { nil }
 }
 

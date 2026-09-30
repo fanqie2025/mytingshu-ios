@@ -82,7 +82,8 @@ final class MekuiSource: BookSource {
         out.intro = cleanText(d["intro"] ?? d["content"])
         out.artist = anyString(d["player"] ?? d["actor"])
         out.author = anyString(d["author"] ?? d["writer"])
-        out.cover = anyString(d["titlepic"] ?? d["pic"]).orEmpty.isEmpty ? book.cover : anyString(d["titlepic"] ?? d["pic"])
+        let pic = anyString(d["titlepic"] ?? d["pic"])
+        out.cover = pic.isEmpty ? book.cover : pic
         return out
     }
 
@@ -221,8 +222,8 @@ final class Ting22Source: BookSource {
 // MARK: - 源查找（统一走 SourceStore：原生源 + 导入的 JSON 规则源）
 
 enum SourceRegistry {
-    @MainActor static var all: [BookSource] { SourceStore.shared.all }
-    @MainActor static func source(withId id: String) -> BookSource? {
+    @MainActor static var all: [any BookSource] { SourceStore.shared.all }
+    @MainActor static func source(withId id: String) -> (any BookSource)? {
         SourceStore.shared.all.first { $0.id == id }
     }
 }

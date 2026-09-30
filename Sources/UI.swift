@@ -49,7 +49,7 @@ struct HomeView: View {
     var body: some View {
         NavigationView {
             List {
-                ForEach(settings.enabledSources) { src in
+                ForEach(settings.enabledSources, id: \.id) { src in
                     NavigationLink(destination: SourceBrowseView(source: src)) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(src.name).font(.headline)
@@ -79,7 +79,7 @@ struct HomeView: View {
 }
 
 struct SourceBrowseView: View {
-    let source: BookSource
+    let source: any BookSource
     @State private var menus: [CategoryMenu] = []
     @State private var selected: SourceCategory?
     @State private var books: [Book] = []
@@ -165,15 +165,22 @@ struct BookRow: View {
 
 struct SearchGroup: Identifiable {
     var id: String { source.id }
-    let source: BookSource
+    let source: any BookSource
     let books: [Book]
 }
 
 struct SourceErrorItem: Identifiable {
-    var id: String { name }
-    let name: String
+    var id: String { source.id }
+    let source: any BookSource
     let message: String
     let needsVerify: Bool
+    var name: String { source.name }
+}
+
+struct VerifyTarget: Identifiable {
+    var id: String { source.id + "|" + keyword }
+    let source: any BookSource
+    let keyword: String
 }
 
 struct SearchView: View {
@@ -182,7 +189,7 @@ struct SearchView: View {
     @State private var results: [SearchGroup] = []
     @State private var errors: [SourceErrorItem] = []
     @State private var searching = false
-    @State private var verifySource: BookSource?
+    @State private var verifyTarget: VerifyTarget?
 
     var body: some View {
         NavigationView {
@@ -214,8 +221,10 @@ struct SearchView: View {
                                 }
                                 Spacer()
                                 if e.needsVerify {
-                                    Button("去验证") { verifySource = settings.enabledSources.first { $0.name == e.name } }
-                                        .font(.footnote)
+                                    Button("去验证") {
+                                        verifyTarget = VerifyTarget(source: e.source, keyword: keyword)
+                                    }
+                                    .font(.footnote)
                                 }
                             }
                         }
@@ -223,8 +232,8 @@ struct SearchView: View {
                 }
             }
             .navigationTitle("搜索")
-            .sheet(item: $verifySource) { src in
-                VerificationSheet(source: src, keyword: keyword) {
+            .sheet(item: $verifyTarget) { t in
+                VerificationSheet(source: t.source, keyword: t.keyword) {
                     Task { await runSearch() }
                 }
             }
@@ -237,8 +246,8 @@ struct SearchView: View {
         searching = true
         results = []; errors = []
         let kw = keyword
-        let sources = settings.enabledSources.filter(\.searchable)
-        await withTaskGroup(of: (BookSource, Result<[Book], Error>).self) { group in
+        let sources = settings.enabledSources.filter { $0.searchable }
+        await withTaskGroup(of: (any BookSource, Result<[Book], Error>).self) { group in
             for s in sources {
                 group.addTask {
                     do { return (s, .success(try await s.search(keyword: kw, page: 1))) }
@@ -251,7 +260,7 @@ struct SearchView: View {
                     if !books.isEmpty { results.append(SearchGroup(source: s, books: books)) }
                 case .failure(let e):
                     let msg = (e as? LocalizedError)?.errorDescription ?? "\(e)"
-                    errors.append(SourceErrorItem(name: s.name, message: msg, needsVerify: msg.contains("验证")))
+                    errors.append(SourceErrorItem(source: s, message: msg, needsVerify: msg.contains("验证")))
                 }
             }
         }
@@ -263,7 +272,7 @@ struct SearchView: View {
 // MARK: - 验证码 WebView
 
 struct VerificationSheet: View {
-    let source: BookSource
+    let source: any BookSource
     let keyword: String
     var onDone: () -> Void
     @Environment(\.dismiss) private var dismiss
@@ -330,7 +339,7 @@ struct BookDetailView: View {
     @State private var errorText: String?
     @ObservedObject private var library = LibraryStore.shared
 
-    private var source: BookSource? { SourceRegistry.source(withId: book.sourceId) }
+    private var source: (any BookSource)? { SourceRegistry.source(withId: book.sourceId) }
 
     var body: some View {
         List {
@@ -467,7 +476,7 @@ struct SettingsView: View {
         NavigationView {
             List {
                 Section("源管理") {
-                    ForEach(store.all) { src in
+                    ForEach(store.all, id: \.id) { src in
                         Toggle(isOn: Binding(
                             get: { settings.enabled.contains(src.id) },
                             set: { on in

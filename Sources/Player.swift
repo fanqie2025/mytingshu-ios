@@ -22,7 +22,7 @@ final class PlayerEngine: ObservableObject {
     private var player: AVPlayer?
     private var timeObserver: Any?
     private var sleepTimer: Timer?
-    private var sourceForCurrent: BookSource?
+    private var sourceForCurrent: (any BookSource)?
 
     var currentEpisode: Episode? {
         guard index >= 0 && index < episodes.count else { return nil }
@@ -48,13 +48,21 @@ final class PlayerEngine: ObservableObject {
     }
 
     private func load(autoPlay: Bool) async {
-        guard let book, let ep = currentEpisode, let src = sourceForCurrent else { return }
+        guard let ep = currentEpisode, let src = sourceForCurrent else { return }
         isLoading = true
         errorText = nil
         do {
             let url = try await src.audioURL(for: ep)
             configureAudioSession()
-            let item = AVPlayerItem(url: url)
+            // 有些源站的音频 CDN 有 Referer 防盗链，必须通过 AVURLAssetHTTPHeaderFieldsKey 带上
+            let headers = src.audioHeaders(for: ep)
+            var item: AVPlayerItem
+            if headers.isEmpty {
+                item = AVPlayerItem(url: url)
+            } else {
+                let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
+                item = AVPlayerItem(asset: asset)
+            }
             if player == nil {
                 player = AVPlayer(playerItem: item)
                 player?.automaticallyWaitsToMinimizeStalling = true
@@ -116,11 +124,12 @@ final class PlayerEngine: ObservableObject {
         guard let minutes else { return }
         sleepDeadline = Date().addingTimeInterval(TimeInterval(minutes * 60))
         sleepTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(minutes * 60), repeats: false) { [weak self] _ in
+            guard let self else { return }
             Task { @MainActor in
-                self?.player?.pause()
-                self?.isPlaying = false
-                self?.sleepDeadline = nil
-                self?.updateNowPlaying()
+                self.player?.pause()
+                self.isPlaying = false
+                self.sleepDeadline = nil
+                self.updateNowPlaying()
             }
         }
     }
@@ -136,25 +145,44 @@ final class PlayerEngine: ObservableObject {
     private func addObservers() {
         guard let player else { return }
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 600), queue: .main) { [weak self] t in
+            guard let self else { return }
+            let seconds = t.seconds
             Task { @MainActor in
-                guard let self else { return }
-                self.position = t.seconds
+                self.position = seconds
                 if let d = self.player?.currentItem?.duration.seconds, d.isFinite, d > 0 { self.duration = d }
                 self.updateNowPlaying()
             }
         }
         NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
                                                object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.next() }
+            guard let self else { return }
+            Task { @MainActor in self.next() }
         }
         let center = MPRemoteCommandCenter.shared()
-        center.playCommand.addTarget { [weak self] _ in Task { @MainActor in self?.toggle() }; return .success }
-        center.pauseCommand.addTarget { [weak self] _ in Task { @MainActor in self?.toggle() }; return .success }
-        center.nextTrackCommand.addTarget { [weak self] _ in Task { @MainActor in self?.next() }; return .success }
-        center.previousTrackCommand.addTarget { [weak self] _ in Task { @MainActor in self?.previous() }; return .success }
+        center.playCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            Task { @MainActor in self.toggle() }
+            return .success
+        }
+        center.pauseCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            Task { @MainActor in self.toggle() }
+            return .success
+        }
+        center.nextTrackCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            Task { @MainActor in self.next() }
+            return .success
+        }
+        center.previousTrackCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            Task { @MainActor in self.previous() }
+            return .success
+        }
         center.changePlaybackPositionCommand.addTarget { [weak self] e in
-            guard let ev = e as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
-            Task { @MainActor in self?.seek(to: ev.positionTime) }
+            guard let self, let ev = e as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            let target = ev.positionTime
+            Task { @MainActor in self.seek(to: target) }
             return .success
         }
     }
@@ -236,23 +264,4 @@ final class LibraryStore: ObservableObject {
         if let d = UserDefaults.standard.data(forKey: favKey), let v = try? dec.decode([Book].self, from: d) { favorites = v }
         if let d = UserDefaults.standard.data(forKey: hisKey), let v = try? dec.decode([HistoryEntry].self, from: d) { history = v }
     }
-}
-
-// MARK: - 已启用的源
-
-@MainActor
-final class SourceSettings: ObservableObject {
-    static let shared = SourceSettings()
-    @Published var enabled: Set<String> { didSet { UserDefaults.standard.set(Array(enabled), forKey: key) } }
-    private let key = "enabled_sources_v1"
-
-    init() {
-        if let arr = UserDefaults.standard.array(forKey: key) as? [String] {
-            enabled = Set(arr)
-        } else {
-            enabled = Set(SourceRegistry.all.map(\.id)) // 首次全开
-        }
-    }
-
-    var enabledSources: [BookSource] { SourceRegistry.all.filter { enabled.contains($0.id) } }
 }

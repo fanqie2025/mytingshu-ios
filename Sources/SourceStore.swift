@@ -13,14 +13,14 @@ final class SourceStore: ObservableObject {
     @Published private(set) var bundled: [SourceRule] = []
 
     /// 代码里写死的原生源（接口复杂、规则表达不了的）
-    let native: [BookSource] = [
+    let native: [any BookSource] = [
         Ting22Source(),
         MekuiSource(),
         KuwoSource()
     ]
 
-    var ruleSources: [BookSource] { (bundled + imported).map { RuleSource(rule: $0) } }
-    var all: [BookSource] { native + ruleSources }
+    var ruleSources: [any BookSource] { (bundled + imported).map { RuleSource(rule: $0) } }
+    var all: [any BookSource] { native + ruleSources }
 
     private var dir: URL {
         let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -140,5 +140,5 @@ final class SourceSettings: ObservableObject {
         for s in SourceStore.shared.all where !enabled.contains(s.id) { enabled.insert(s.id) }
     }
 
-    var enabledSources: [BookSource] { SourceStore.shared.all.filter { enabled.contains($0.id) } }
+    var enabledSources: [any BookSource] { SourceStore.shared.all.filter { enabled.contains($0.id) } }
 }
