@@ -15,7 +15,9 @@ final class PlayerEngine: ObservableObject {
     @Published private(set) var isLoading = false
     @Published var position: Double = 0
     @Published var duration: Double = 0
-    @Published var rate: Float = 1.0
+    @Published var rate: Float {
+        didSet { UserDefaults.standard.set(rate, forKey: "rate_v1") }
+    }
     @Published var errorText: String?
     @Published var sleepDeadline: Date?
 
@@ -31,6 +33,7 @@ final class PlayerEngine: ObservableObject {
     private var appliedIntro = false
 
     private init() {
+        rate = UserDefaults.standard.object(forKey: "rate_v1") as? Float ?? 1.0
         skipIntro = UserDefaults.standard.double(forKey: "skip_intro_v1")
         skipOutro = UserDefaults.standard.double(forKey: "skip_outro_v1")
     }
@@ -64,11 +67,18 @@ final class PlayerEngine: ObservableObject {
     }
 
     private func load(autoPlay: Bool) async {
-        guard let ep = currentEpisode, let src = sourceForCurrent else { return }
+        guard let book, let ep = currentEpisode, let src = sourceForCurrent else { return }
         isLoading = true
         errorText = nil
         do {
-            let url = try await src.audioURL(for: ep)
+            // 已经缓存过就直接放本地文件（离线也能听、不受直链过期影响）
+            let localURL = CacheManager.shared.localURL(for: ep.url)
+            let url: URL
+            if let localURL {
+                url = localURL
+            } else {
+                url = try await src.audioURL(for: ep)
+            }
             configureAudioSession()
             // 有些源站的音频 CDN 有 Referer 防盗链，必须通过 AVURLAssetHTTPHeaderFieldsKey 带上
             let headers = src.audioHeaders(for: ep)
@@ -92,6 +102,14 @@ final class PlayerEngine: ObservableObject {
             appliedIntro = false
             if autoPlay { player?.play(); isPlaying = true } else { isPlaying = false }
             updateNowPlaying()
+
+            // 自动缓存后面几集
+            let prefetchCount = CacheManager.shared.autoCacheNext
+            if prefetchCount > 0, let book, localURL == nil {
+                let list = episodes
+                let from = index
+                Task { await CacheManager.shared.prefetch(book: book, episodes: list, from: from, count: prefetchCount) }
+            }
         } catch {
             errorText = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             isPlaying = false

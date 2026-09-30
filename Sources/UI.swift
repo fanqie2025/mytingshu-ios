@@ -465,8 +465,11 @@ struct SettingsView: View {
     @ObservedObject var settings = SourceSettings.shared
     @ObservedObject var store = SourceStore.shared
     @ObservedObject var player = PlayerEngine.shared
+    @ObservedObject var cache = CacheManager.shared
     @Environment(\.dismiss) private var dismiss
     @State private var showImport = false
+    @State private var showRate = false
+    @State private var showSleep = false
     @State private var importText = ""
     @State private var importURL = ""
     @State private var importMsg = ""
@@ -514,10 +517,6 @@ struct SettingsView: View {
                 }
 
                 Section("播放") {
-                    Picker("倍速", selection: Binding(get: { Double(player.rate) }, set: { player.setRate(Float($0)) })) {
-                        Text("0.75x").tag(0.75); Text("1.0x").tag(1.0)
-                        Text("1.25x").tag(1.25); Text("1.5x").tag(1.5); Text("2.0x").tag(2.0)
-                    }
                     Picker("跳过片头", selection: Binding(
                         get: { Int(player.skipIntro) },
                         set: { player.skipIntro = Double($0) })) {
@@ -530,12 +529,36 @@ struct SettingsView: View {
                         Text("不跳过").tag(0); Text("5 秒").tag(5); Text("10 秒").tag(10)
                         Text("15 秒").tag(15); Text("30 秒").tag(30); Text("45 秒").tag(45); Text("60 秒").tag(60)
                     }
-                    Picker("定时关闭", selection: Binding(
-                        get: { sleepTag },
-                        set: { player.setSleep(minutes: $0 == 0 ? nil : $0) })) {
-                        Text("关闭").tag(0); Text("15 分钟").tag(15)
-                        Text("30 分钟").tag(30); Text("60 分钟").tag(60)
+                    HStack {
+                        Text("倍速")
+                        Spacer()
+                        Button(rateLabel(player.rate)) { showRate = true }
+                            .foregroundColor(.orange)
                     }
+                    HStack {
+                        Text("定时关闭")
+                        Spacer()
+                        Button(player.sleepDeadline == nil ? "关闭" : sleepTitle) { showSleep = true }
+                            .foregroundColor(.orange)
+                    }
+                }
+
+                Section("缓存") {
+                    Picker("自动缓存下集", selection: Binding(
+                        get: { CacheManager.shared.autoCacheNext },
+                        set: { CacheManager.shared.autoCacheNext = $0 })) {
+                        Text("关闭").tag(0)
+                        Text("缓存 1 集").tag(1)
+                        Text("缓存 2 集").tag(2)
+                        Text("缓存 3 集").tag(3)
+                    }
+                    HStack {
+                        Text("已缓存占用")
+                        Spacer()
+                        Text(cache.sizeText()).foregroundColor(.secondary)
+                    }
+                    Button("清空缓存", role: .destructive) { cache.clearAll() }
+                        .disabled(cache.cachedKeys.isEmpty)
                 }
 
                 Section("关于") {
@@ -548,7 +571,14 @@ struct SettingsView: View {
             .navigationTitle("设置")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             .sheet(isPresented: $showImport) { importSheet }
+            .sheet(isPresented: $showRate) { RateSheet() }
+            .sheet(isPresented: $showSleep) { SleepSheet() }
         }
+    }
+
+    private var sleepTitle: String {
+        guard let d = player.sleepDeadline else { return "关闭" }
+        return "\(max(0, Int(d.timeIntervalSinceNow / 60))) 分钟后"
     }
 
     private var importSheet: some View {
@@ -654,6 +684,8 @@ struct PlayerView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showEpisodes = false
     @State private var showSkip = false
+    @State private var showRate = false
+    @State private var showSleep = false
 
     var body: some View {
         NavigationView {
@@ -696,13 +728,10 @@ struct PlayerView: View {
                         Button("15 分钟") { player.setSleep(minutes: 15) }
                         Button("30 分钟") { player.setSleep(minutes: 30) }
                         Button("60 分钟") { player.setSleep(minutes: 60) }
+                        Button("自定义…") { showSleep = true }
                     } label: { toolLabel("timer", sleepTitle) }
 
-                    Menu {
-                        ForEach(rateOptions) { opt in
-                            Button(opt.label) { player.setRate(opt.value) }
-                        }
-                    } label: { toolLabel("speedometer", rateLabel(player.rate)) }
+                    Button { showRate = true } label: { toolLabel("speedometer", rateLabel(player.rate)) }
 
                     Button { showEpisodes = true } label: { toolLabel("list.bullet", "列表") }
                     Button { showSkip = true } label: { toolLabel("arrow.right.to.line", "片头片尾") }
@@ -754,6 +783,8 @@ struct PlayerView: View {
             }
             .sheet(isPresented: $showEpisodes) { EpisodeListSheet() }
             .sheet(isPresented: $showSkip) { SkipSettingsSheet() }
+            .sheet(isPresented: $showRate) { RateSheet() }
+            .sheet(isPresented: $showSleep) { SleepSheet() }
         }
     }
 
@@ -763,10 +794,6 @@ struct PlayerView: View {
             Text(title).font(.caption2)
         }
         .frame(maxWidth: .infinity)
-    }
-
-    private func rateLabel(_ r: Float) -> String {
-        rateOptions.first { abs($0.value - r) < 0.01 }?.label ?? String(format: "%.2fx", r)
     }
 
     private var sleepTitle: String {
@@ -785,33 +812,156 @@ struct PlayerView: View {
 
 struct EpisodeListSheet: View {
     @ObservedObject var player = PlayerEngine.shared
+    @ObservedObject var cache = CacheManager.shared
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationView {
             List {
                 ForEach(player.episodes.indices, id: \.self) { i in
-                    Button {
-                        if let book = player.book {
-                            player.play(book: book, episodes: player.episodes, startAt: i)
-                        }
-                        dismiss()
-                    } label: {
-                        HStack {
-                            Text("\(i + 1). " + (player.episodes[i].title.isEmpty ? "第 \(i + 1) 集" : player.episodes[i].title))
-                                .font(.subheadline).lineLimit(1)
-                            Spacer()
-                            if i == player.index {
-                                Image(systemName: "speaker.wave.2.fill").foregroundColor(.orange)
+                    HStack {
+                        Button {
+                            if let book = player.book {
+                                player.play(book: book, episodes: player.episodes, startAt: i)
+                            }
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Text("\(i + 1). " + (player.episodes[i].title.isEmpty ? "第 \(i + 1) 集" : player.episodes[i].title))
+                                    .font(.subheadline).lineLimit(1)
+                                Spacer()
+                                if i == player.index {
+                                    Image(systemName: "speaker.wave.2.fill").foregroundColor(.orange)
+                                }
                             }
                         }
+                        .buttonStyle(.plain)
+
+                        // 缓存这一集
+                        if cache.isCached(player.episodes[i].url) {
+                            Image(systemName: "arrow.down.circle.fill").foregroundColor(.green)
+                        } else if cache.isDownloading(player.episodes[i].url) {
+                            ProgressView().scaleEffect(0.7)
+                        } else {
+                            Button {
+                                guard let book = player.book,
+                                      let src = SourceStore.shared.all.first(where: { $0.id == book.sourceId }) else { return }
+                                let ep = player.episodes[i]
+                                Task { await CacheManager.shared.cache(episode: ep, source: src) }
+                            } label: {
+                                Image(systemName: "arrow.down.circle")
+                            }
+                            .buttonStyle(.borderless)
+                        }
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .navigationTitle("章节（\(player.episodes.count)）")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("关闭") { dismiss() } } }
+        }
+    }
+}
+
+// MARK: - 倍速（自定义）
+
+struct RateSheet: View {
+    @ObservedObject var player = PlayerEngine.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var value: Double = 1.0
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("拖动设置任意倍速（0.50x – 3.00x）") {
+                    HStack {
+                        Text("当前倍速")
+                        Spacer()
+                        Text(String(format: "%.2fx", value)).monospacedDigit().foregroundColor(.orange)
+                    }
+                    Slider(value: Binding(get: { value },
+                                          set: { value = $0; player.setRate(Float($0)) }),
+                           in: 0.5...3.0, step: 0.05)
+                    HStack(spacing: 12) {
+                        Button("-0.05") { bump(-0.05) }
+                        Button("1.0x") { set(1.0) }
+                        Button("+0.05") { bump(0.05) }
+                    }
+                    .buttonStyle(.bordered)
+                }
+                Section("常用") {
+                    ForEach(rateOptions) { opt in
+                        Button {
+                            set(Double(opt.value))
+                        } label: {
+                            HStack {
+                                Text(opt.label)
+                                Spacer()
+                                if abs(Double(opt.value) - value) < 0.001 {
+                                    Image(systemName: "checkmark").foregroundColor(.orange)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("倍速")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { player.setRate(Float(value)); dismiss() }
+                }
+            }
+            .onAppear { value = Double(player.rate) }
+        }
+    }
+
+    private func bump(_ d: Double) { set(value + d) }
+
+    private func set(_ v: Double) {
+        value = min(3.0, max(0.5, (v * 100).rounded() / 100))
+        player.setRate(Float(value))
+    }
+}
+
+// MARK: - 定时关闭（自定义分钟）
+
+struct SleepSheet: View {
+    @ObservedObject var player = PlayerEngine.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var minutes: Int = 30
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("自定义") {
+                    Stepper("\(minutes) 分钟后停止", value: $minutes, in: 5...300, step: 5)
+                    Button("开始计时") {
+                        player.setSleep(minutes: minutes)
+                        dismiss()
+                    }
+                    if player.sleepDeadline != nil {
+                        Button("取消定时", role: .destructive) {
+                            player.setSleep(minutes: nil)
+                            dismiss()
+                        }
+                    }
+                }
+                Section("常用") {
+                    ForEach([15, 30, 45, 60, 90, 120], id: \.self) { m in
+                        Button("\(m) 分钟") {
+                            player.setSleep(minutes: m)
+                            dismiss()
+                        }
+                    }
+                }
+                Section {
+                    Text("到点会自动暂停播放（App 在后台也会生效）。").font(.caption).foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("定时关闭")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
         }
     }
 }
@@ -864,3 +1014,9 @@ let rateOptions: [RateOption] = [
     RateOption(value: 1.5, label: "1.5x"),
     RateOption(value: 2.0, label: "2.0x")
 ]
+
+/// 倍速显示文本（支持任意自定义值）
+func rateLabel(_ r: Float) -> String {
+    if let hit = rateOptions.first(where: { abs($0.value - r) < 0.01 }) { return hit.label }
+    return String(format: "%.2fx", r)
+}
