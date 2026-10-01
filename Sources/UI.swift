@@ -200,6 +200,14 @@ struct SearchView: View {
                         TextField("书名 / 作者 / 播音", text: $keyword)
                             .textFieldStyle(.roundedBorder)
                             .onSubmit { Task { await runSearch() } }
+                        if !keyword.isEmpty {
+                            Button {
+                                keyword = ""; results = []; errors = []
+                            } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
                         Button("搜索") { Task { await runSearch() } }
                             .disabled(keyword.isEmpty || searching)
                     }
@@ -242,8 +250,13 @@ struct SearchView: View {
         .navigationViewStyle(.stack)
     }
 
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
     private func runSearch() async {
         guard !keyword.isEmpty, !searching else { return }
+        dismissKeyboard()
         searching = true
         results = []; errors = []
         let kw = keyword
@@ -538,11 +551,12 @@ struct SettingsView: View {
                         Text("不跳过").tag(0); Text("5 秒").tag(5); Text("10 秒").tag(10)
                         Text("15 秒").tag(15); Text("30 秒").tag(30); Text("45 秒").tag(45); Text("60 秒").tag(60)
                     }
-                    HStack {
-                        Text("倍速")
-                        Spacer()
-                        Button(rateLabel(player.rate)) { showRate = true }
-                            .foregroundColor(.orange)
+                    HStack(spacing: 10) {
+                        Text("倍速").font(.subheadline)
+                        Slider(value: Binding(get: { Double(player.rate) },
+                                              set: { player.setRate(Float(($0 * 100).rounded() / 100)) }),
+                               in: 0.5...3.0, step: 0.05)
+                        Text(rateLabel(player.rate)).font(.caption).monospacedDigit().frame(width: 50)
                     }
                     HStack {
                         Text("定时关闭")
@@ -581,7 +595,6 @@ struct SettingsView: View {
             .navigationTitle("设置")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             .sheet(isPresented: $showImport) { importSheet }
-            .sheet(isPresented: $showRate) { RateSheet() }
             .sheet(isPresented: $showSleep) { SleepSheet() }
             .sheet(isPresented: $showDiag) { DiagnosticsView() }
         }
@@ -747,14 +760,26 @@ struct PlayerView: View {
                         Button("自定义…") { showSleep = true }
                     } label: { toolLabel("timer", sleepTitle) }
 
-                    Button { showRate = true } label: { toolLabel("speedometer", rateLabel(player.rate)) }
+                    Button { withAnimation { showRate.toggle() } } label: { toolLabel("speedometer", rateLabel(player.rate)) }
 
-                    Button { showEpisodes = true } label: { toolLabel("list.bullet", "列表") }
+                    Button { showEpisodes = true } label: { toolLabel("list.bullet", "选集 \(player.index + 1)/\(player.episodes.count)") }
                     Button { showSkip = true } label: { toolLabel("arrow.right.to.line", "片头片尾") }
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(.primary)
                 .padding(.vertical, 4)
+
+                // 倍速：直接在播放页滑，不再套菜单
+                if showRate {
+                    HStack(spacing: 10) {
+                        Text("倍速").font(.caption2).foregroundColor(.secondary)
+                        Slider(value: Binding(get: { Double(player.rate) },
+                                              set: { player.setRate(Float(($0 * 100).rounded() / 100)) }),
+                               in: 0.5...3.0, step: 0.05)
+                        Text(rateLabel(player.rate)).font(.caption).monospacedDigit().frame(width: 54)
+                    }
+                    .padding(.horizontal)
+                }
 
                 // 进度
                 VStack(spacing: 2) {
@@ -800,7 +825,6 @@ struct PlayerView: View {
             }
             .sheet(isPresented: $showEpisodes) { EpisodeListSheet() }
             .sheet(isPresented: $showSkip) { SkipSettingsSheet() }
-            .sheet(isPresented: $showRate) { RateSheet() }
             .sheet(isPresented: $showSleep) { SleepSheet() }
             .sheet(isPresented: $showInfo) { BookInfoSheet() }
         }
@@ -867,21 +891,6 @@ struct BookInfoSheet: View {
                             Label(library.isFavorite(b) ? "取消收藏" : "收藏这本书",
                                   systemImage: library.isFavorite(b) ? "heart.fill" : "heart")
                         }
-
-                        Button {
-                            Task { await cache.cacheAll(book: b, episodes: player.episodes) }
-                        } label: {
-                            if cache.batching {
-                                Label("缓存中 \(cache.batchDone)/\(cache.batchTotal)", systemImage: "arrow.down.circle")
-                            } else {
-                                Label("缓存整本（\(player.episodes.count) 集）", systemImage: "arrow.down.circle")
-                            }
-                        }
-                        .disabled(cache.batching || player.episodes.isEmpty)
-
-                        if cache.batching {
-                            ProgressView(value: Double(cache.batchDone), total: Double(max(cache.batchTotal, 1)))
-                        }
                     }
                 } else {
                     Text("还没有在播放的书").foregroundColor(.secondary)
@@ -900,10 +909,28 @@ struct EpisodeListSheet: View {
     @ObservedObject var player = PlayerEngine.shared
     @ObservedObject var cache = CacheManager.shared
     @Environment(\.dismiss) private var dismiss
+    @State private var jumpText = ""
 
     var body: some View {
         NavigationView {
             List {
+                // 快捷选集：直接输入集号跳
+                Section {
+                    HStack {
+                        Text("跳到第")
+                        TextField("集号", text: $jumpText)
+                            .keyboardType(.numberPad)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 72)
+                        Text("集")
+                        Spacer()
+                        Button("跳转") { jump() }
+                            .disabled(Int(jumpText) == nil)
+                    }
+                    Text("当前第 \(player.index + 1) 集 / 共 \(player.episodes.count) 集")
+                        .font(.caption2).foregroundColor(.secondary)
+                }
+
                 ForEach(player.episodes.indices, id: \.self) { i in
                     HStack {
                         Button {
@@ -942,10 +969,16 @@ struct EpisodeListSheet: View {
                     }
                 }
             }
-            .navigationTitle("章节（\(player.episodes.count)）")
+            .navigationTitle("选集（\(player.episodes.count) 集）")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("关闭") { dismiss() } } }
         }
+    }
+
+    private func jump() {
+        guard let n = Int(jumpText), n >= 1, n <= player.episodes.count, let book = player.book else { return }
+        player.play(book: book, episodes: player.episodes, startAt: n - 1)
+        dismiss()
     }
 }
 

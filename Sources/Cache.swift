@@ -19,7 +19,8 @@ final class CacheManager: ObservableObject {
     private let fm = FileManager.default
 
     private init() {
-        autoCacheNext = UserDefaults.standard.object(forKey: "auto_cache_next_v1") as? Int ?? 1
+        // 默认**不**自动缓存：自动下载会抢带宽、让起播变慢；用户可在设置里自己开
+        autoCacheNext = UserDefaults.standard.object(forKey: "auto_cache_next_v1") as? Int ?? 0
         refresh()
     }
 

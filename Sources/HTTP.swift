@@ -91,21 +91,68 @@ enum HTTPClient {
         return decode(data)
     }
 
-    /// 解「反转 + base64」型 JS 挑战，取里面要写的 cookie 值。
-    /// 支持两种写法：`cookieName=<值>;` 或 `cookieName=' + encodeURIComponent(token)`（token 是同段脚本里的变量）
-    static func solveGuardToken(_ html: String, cookieName: String) -> String? {
-        guard let raw = html.firstMatch(#"var\s+reversed\s*=\s*"([^"]+)""#) else { return nil }
+    /// 解「反转 + base64」型 JS Cookie 挑战，返回该写的**全部** cookie。
+    ///
+    /// 站点有两种写法，只写一个 cookie 会一直停在挑战页（「能搜索、进不去」的根因）：
+    ///   A) `document.cookie = '__51guid__=' + encodeURIComponent(token) + '; ' + config;`（PTCMS：爱听书/13听书网）
+    ///   B) `var mainCookie = 'pt_guid=' + encodeURIComponent(token) + '; ' + config;` → `document.cookie = mainCookie;`（乐听网/29听书网）
+    ///   C) `document.cookie = 'name=value; path=/';`
+    static func solveGuardCookies(_ html: String) -> [(String, String)] {
+        guard let raw = html.firstMatch(#"var\s+reversed\s*=\s*"([^"]+)""#) else { return [] }
         let forward = String(raw.reversed())
         let padded = forward + String(repeating: "=", count: (4 - forward.count % 4) % 4)
         guard let data = Data(base64Encoded: padded, options: .ignoreUnknownCharacters),
-              let js = String(data: data, encoding: .utf8) else { return nil }
-        // 1) cookie 直接内联写法（token 可能是 base64，含 + / =，所以只排除分隔符）
-        if let v = js.firstMatch(#"\#(cookieName)=([^;'" ]{6,})"#) { return v }
-        // 2) token 变量写法（脚本里先定义 token，再用 encodeURIComponent 拼 cookie）
-        for pattern in [#"var\s+token\s*=\s*['"]([^'"]+)['"]"#, #"\btoken\s*=\s*['"]([^'"]+)['"]"#] {
-            if let v = js.firstMatch(pattern) { return v }
+              let js = String(data: data, encoding: .utf8) else { return [] }
+
+        // var X = '...'
+        let vNames = js.allMatches(#"var\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'"#)
+        let vValues = js.allMatches(#"var\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*'([^']*)'"#)
+        var vars: [String: String] = [:]
+        for (i, n) in vNames.enumerated() where i < vValues.count { vars[n] = vValues[i] }
+
+        // 形态 B 的中间变量：lhs = '<cookieName>=' + [encodeURIComponent(](var)
+        let expr = #"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'([A-Za-z_][A-Za-z0-9_]*)='\s*\+\s*(?:encodeURIComponent\()?([A-Za-z_][A-Za-z0-9_]*)\)?"#
+        let lhsList = js.allMatches(expr, group: 1)
+        let cnameList = js.allMatches(expr, group: 2)
+        let rvarList = js.allMatches(expr, group: 3)
+        var viaVar: [String: (String, String)] = [:]
+        for (i, l) in lhsList.enumerated() where i < cnameList.count && i < rvarList.count {
+            viaVar[l] = (cnameList[i], vars[rvarList[i]] ?? "")
         }
-        return nil
+
+        var cookies: [String: String] = [:]
+        for rawExpr in js.allMatches(#"document\.cookie\s*=\s*([^;\n]+)"#) {
+            let e = rawExpr.trimmingCharacters(in: .whitespacesAndNewlines)
+            // A) 直接拼接字符串
+            let direct = #"^'([A-Za-z_][A-Za-z0-9_]*)='\s*\+\s*(?:encodeURIComponent\()?([A-Za-z_][A-Za-z0-9_]*)\)?"#
+            if let n = e.firstMatch(direct, group: 1), let vn = e.firstMatch(direct, group: 2) {
+                cookies[n] = vars[vn] ?? ""
+                continue
+            }
+            // C) 纯字面量 'name=value'
+            let literal = #"^'([A-Za-z_][A-Za-z0-9_]*)=([^;']*)"#
+            if let n = e.firstMatch(literal, group: 1), let v = e.firstMatch(literal, group: 2) {
+                cookies[n] = v
+                continue
+            }
+            // B) 引用中间变量
+            if let ref = e.firstMatch(#"^([A-Za-z_][A-Za-z0-9_]*)$"#), let pair = viaVar[ref] {
+                cookies[pair.0] = pair.1
+            }
+        }
+        return cookies.map { ($0.key, $0.value) }
+    }
+
+    /// 把守卫要求的 cookie 全写进共享存储
+    static func applyGuardCookies(_ cookies: [(String, String)], host: String) {
+        for (name, value) in cookies where !name.isEmpty {
+            setCookie(name: name, value: value, host: host)
+        }
+    }
+
+    /// 兼容旧调用：只取某一个 cookie 的值
+    static func solveGuardToken(_ html: String, cookieName: String) -> String? {
+        solveGuardCookies(html).first { $0.0 == cookieName }?.1
     }
 
     /// 写一个 cookie 到共享存储（供后续请求带上）

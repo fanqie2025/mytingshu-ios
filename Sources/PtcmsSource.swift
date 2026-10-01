@@ -44,33 +44,18 @@ final class PtcmsSource: BookSource {
             // 命中限流：换另一种 UA 再试一次
             text = try await once(url, desktop: !desktop, form: form)
         }
-        if text.contains("var reversed") || text.contains("__51guid__") {
-            if let token = Self.solveGuard(text) {
-                Self.setGuardCookie(token, host: host)
+        if text.contains("var reversed") {
+            // 守卫可能连着来两次（挑战页会给新 token），最多重放 2 轮
+            var left = 2
+            while left > 0, text.contains("var reversed") {
+                let cookies = HTTPClient.solveGuardCookies(text)
+                if cookies.isEmpty { break }
+                HTTPClient.applyGuardCookies(cookies, host: host)
                 text = try await once(url, desktop: desktop, form: form)
+                left -= 1
             }
         }
         return text
-    }
-
-    /// 解 51.LA 的 JS 挑战：var reversed → 反转 → base64 → 里面写着 __51guid__ 的 token
-    static func solveGuard(_ html: String) -> String? {
-        guard let raw = html.firstMatch(#"var\s+reversed\s*=\s*"([^"]+)""#) else { return nil }
-        let forward = String(raw.reversed())
-        let padded = forward + String(repeating: "=", count: (4 - forward.count % 4) % 4)
-        guard let data = Data(base64Encoded: padded, options: .ignoreUnknownCharacters),
-              let js = String(data: data, encoding: .utf8) else { return nil }
-        if let m = js.firstMatch(#"__51guid__=([^;'"\\]+)"#) { return m }
-        if let m = js.firstMatch(#"token\s*=\s*['"]([^'"]+)['"]"#) { return m }
-        return nil
-    }
-
-    static func setGuardCookie(_ token: String, host: String) {
-        guard let h = URL(string: host)?.host else { return }
-        let props: [HTTPCookiePropertyKey: Any] = [
-            .domain: h, .path: "/", .name: "__51guid__", .value: token
-        ]
-        if let c = HTTPCookie(properties: props) { HTTPCookieStorage.shared.setCookie(c) }
     }
 
     // MARK: - 列表解析（搜索页与分类页结构一致）

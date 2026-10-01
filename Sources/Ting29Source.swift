@@ -24,12 +24,13 @@ final class Ting29Source: BookSource {
 
     private func fetch(_ url: String, referer: String? = nil, desktop: Bool = false) async throws -> String {
         var text = try await raw(url, referer: referer, desktop: desktop)
-        if text.contains("var reversed") || text.contains("pt_guid") {
-            if let token = HTTPClient.solveGuardToken(text, cookieName: "pt_guid") {
-                HTTPClient.setCookie(name: "pt_guid", value: token, host: host)
-                HTTPClient.setCookie(name: "ptcms_guard_retry", value: "1", host: host)
-                text = try await raw(url, referer: referer, desktop: desktop)
-            }
+        var left = 2
+        while left > 0, text.contains("var reversed") {
+            let cookies = HTTPClient.solveGuardCookies(text)
+            if cookies.isEmpty { break }
+            HTTPClient.applyGuardCookies(cookies, host: host)
+            text = try await raw(url, referer: referer, desktop: desktop)
+            left -= 1
         }
         return text
     }
