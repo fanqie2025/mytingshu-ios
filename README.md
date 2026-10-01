@@ -70,6 +70,28 @@ https://raw.githubusercontent.com/fanqie2025/mytingshu-sources/main/subscription
 > （规则里 `discoverable: false`），但在搜索页能搜到；单田芳反过来（`searchable: false`）。
 > 源会随站点改版失效 —— 书源仓库里有逐站校验脚本（搜索 → 分类 → 详情 → 章节 → 音频直链 → 真拉 1KB）。
 
+### 提交书源前的检查（防「Python 验通、App 导不进来」）
+
+App 的 `JSONDecoder` 比书源侧的 Python 复刻严格：曾经有一个源少写必填字段，
+导致**整份订阅导入失败**（`parseRules` 是整体 decode，一个源抛错 → 一个都写不进去），
+而 Python 侧当时全绿。
+
+`tools/audit_subscription.py` 会**直接从 `Sources/RuleSource.swift` 解析 schema**（不手抄字段表，不会漂移）再校验：
+
+```bash
+# 本机（路径指向书源仓库）
+python3 tools/audit_subscription.py ../sources-private/subscription/sources.json
+
+# 或直接验线上那条订阅
+python3 tools/audit_subscription.py \
+  https://cdn.jsdelivr.net/gh/fanqie2025/mytingshu-sources@main/subscription/sources.json
+
+# 未知字段（八成是拼错了）也算失败
+python3 tools/audit_subscription.py sources.json --strict
+```
+
+书源仓库的 CI（`verify.yml` → `ios_schema`）每次 push 都会跑这一项，**阻塞**。
+
 一个书源条目的格式（字段都可选）：
 
 ```json
