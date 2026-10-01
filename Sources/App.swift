@@ -16,13 +16,24 @@ struct MyTingShuApp: App {
 
 struct RootView: View {
     var body: some View {
+        // 迷你播放条挂在每个页签内容的底部（而不是挂在 TabView 上），
+        // 这样它不会盖住底部 dock 栏。
         TabView {
-            BookshelfView().tabItem { Label("书架", systemImage: "books.vertical.fill") }
-            SearchView().tabItem { Label("搜索", systemImage: "magnifyingglass") }
-            HomeView().tabItem { Label("书源", systemImage: "square.grid.2x2") }
-            HistoryView().tabItem { Label("历史", systemImage: "clock.arrow.circlepath") }
-            SettingsView().tabItem { Label("设置", systemImage: "gearshape") }
+            BookshelfView()
+                .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
+                .tabItem { Label("书架", systemImage: "books.vertical.fill") }
+            SearchView()
+                .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
+                .tabItem { Label("搜索", systemImage: "magnifyingglass") }
+            HomeView()
+                .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
+                .tabItem { Label("书源", systemImage: "square.grid.2x2") }
+            HistoryView()
+                .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
+                .tabItem { Label("历史", systemImage: "clock.arrow.circlepath") }
+            SettingsView()
+                .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
+                .tabItem { Label("设置", systemImage: "gearshape") }
         }
-        .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
     }
 }

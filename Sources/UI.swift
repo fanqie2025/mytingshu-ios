@@ -4,38 +4,53 @@ import WebKit
 
 // MARK: - 迷你播放条
 
+/// 迷你播放条：**小圆圈/胶囊**（不是整条），点一下开播放页，右侧是播放/暂停。
+/// 放在每个页签内容的底部（不贴在 TabView 上），这样不会盖住底部 dock 栏。
 struct MiniPlayerBar: View {
     @ObservedObject var player = PlayerEngine.shared
     @State private var showFull = false
 
     var body: some View {
         if let book = player.book, let ep = player.currentEpisode {
-            Button { showFull = true } label: {
-                HStack(spacing: 12) {
-                    AsyncImage(url: URL(string: book.cover)) { img in
-                        img.resizable().aspectRatio(contentMode: .fill)
-                    } placeholder: {
-                        Color.orange.opacity(0.2)
-                    }
-                    .frame(width: 44, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            HStack(spacing: 10) {
+                Button { showFull = true } label: {
+                    HStack(spacing: 8) {
+                        AsyncImage(url: URL(string: book.cover)) { img in
+                            img.resizable().aspectRatio(contentMode: .fill)
+                        } placeholder: {
+                            Color.orange.opacity(0.25)
+                        }
+                        .frame(width: 36, height: 36)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(ep.title.isEmpty ? book.title : ep.title)
-                            .font(.subheadline).lineLimit(1)
-                        Text(book.title).font(.caption).foregroundColor(.secondary).lineLimit(1)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(ep.title.isEmpty ? book.title : ep.title)
+                                .font(.caption).lineLimit(1)
+                            Text(book.title).font(.caption2).foregroundColor(.secondary).lineLimit(1)
+                        }
+                        .frame(maxWidth: 150, alignment: .leading)
                     }
-                    Spacer()
-                    Button { player.toggle() } label: {
-                        Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 32))
-                    }
-                    .buttonStyle(.plain)
+                    .padding(.leading, 6)
+                    .padding(.trailing, 10)
+                    .padding(.vertical, 5)
+                    .background(.ultraThinMaterial, in: Capsule())
                 }
-                .padding(.horizontal, 12).padding(.vertical, 6)
-                .background(.ultraThinMaterial)
+                .buttonStyle(.plain)
+
+                Button { player.toggle() } label: {
+                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 15, weight: .bold))
+                        .frame(width: 36, height: 36)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
+            .padding(.leading, 10)
+            .padding(.trailing, 10)
+            .padding(.bottom, 4)
             .sheet(isPresented: $showFull) { PlayerView() }
         }
     }
@@ -925,29 +940,62 @@ struct EpisodeListSheet: View {
     @ObservedObject var player = PlayerEngine.shared
     @ObservedObject var cache = CacheManager.shared
     @Environment(\.dismiss) private var dismiss
-    @State private var jumpText = ""
+    @State private var rangeIndex: Int? = nil
+
+    /// 每 20 集一组（和原版一致）
+    private let chunk = 20
+
+    private var chunks: [[Int]] {
+        stride(from: 0, to: player.episodes.count, by: chunk).map { start in
+            Array(start..<min(start + chunk, player.episodes.count))
+        }
+    }
+
+    private var visible: [Int] {
+        if let r = rangeIndex, r >= 0, r < chunks.count { return chunks[r] }
+        return Array(player.episodes.indices)
+    }
 
     var body: some View {
         NavigationView {
             List {
-                // 快捷选集：直接输入集号跳
-                Section {
-                    HStack {
-                        Text("跳到第")
-                        TextField("集号", text: $jumpText)
-                            .keyboardType(.numberPad)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 72)
-                        Text("集")
-                        Spacer()
-                        Button("跳转") { jump() }
-                            .disabled(Int(jumpText) == nil)
+                // 选集：每 20 集一个格子，点一下只看这一段
+                if chunks.count > 1 {
+                    Section {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3),
+                                  spacing: 8) {
+                            ForEach(chunks.indices, id: \.self) { ci in
+                                let c = chunks[ci]
+                                let on = rangeIndex == ci
+                                Button {
+                                    rangeIndex = on ? nil : ci
+                                } label: {
+                                    Text("\(c[c.startIndex] + 1)~\(c[c.endIndex - 1] + 1)")
+                                        .font(.callout)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 10)
+                                        .background(on ? Color.orange.opacity(0.85) : Color(.secondarySystemBackground))
+                                        .foregroundColor(on ? .white : .primary)
+                                        .cornerRadius(8)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                        HStack {
+                            Text("当前第 \(player.index + 1) 集 / 共 \(player.episodes.count) 集")
+                                .font(.caption2).foregroundColor(.secondary)
+                            Spacer()
+                            if rangeIndex != nil {
+                                Button("显示全部") { rangeIndex = nil }.font(.caption2)
+                            }
+                        }
+                    } header: {
+                        Text("选集（每 \(chunk) 集一组）")
                     }
-                    Text("当前第 \(player.index + 1) 集 / 共 \(player.episodes.count) 集")
-                        .font(.caption2).foregroundColor(.secondary)
                 }
 
-                ForEach(player.episodes.indices, id: \.self) { i in
+                ForEach(visible, id: \.self) { i in
                     HStack {
                         Button {
                             if let book = player.book {
@@ -985,16 +1033,16 @@ struct EpisodeListSheet: View {
                     }
                 }
             }
-            .navigationTitle("选集（\(player.episodes.count) 集）")
+            .navigationTitle("选集（共 \(player.episodes.count) 集）")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("关闭") { dismiss() } } }
+            .onAppear {
+                // 默认定位到正在播放的那一组
+                if let ci = chunks.firstIndex(where: { $0.contains(player.index) }) {
+                    rangeIndex = ci
+                }
+            }
         }
-    }
-
-    private func jump() {
-        guard let n = Int(jumpText), n >= 1, n <= player.episodes.count, let book = player.book else { return }
-        player.play(book: book, episodes: player.episodes, startAt: n - 1)
-        dismiss()
     }
 }
 
