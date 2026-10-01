@@ -80,6 +80,7 @@ struct SourceRule: Codable, Identifiable {
         var metaDefaults: [String: String]?
         // v2：重试 / 校验 / 签名 / 改写
         var retries: Int?                  // 失败重试次数（每次重新拉章节页，默认 1）
+        var retryDelayMs: Int?             // 两次重试之间等多久（有些站是突发限流，要等几秒）
         var statusField: String?           // 返回体里的状态字段（如 "status"）
         var statusOK: String?              // 状态等于它才算成功（如 "200"）
         var ua: String?                    // 拉章节页用的 UA（PTCMS 这类要桌面 UA）
@@ -134,6 +135,19 @@ final class RuleSource: BookSource {
         if s.hasPrefix("http") { return s }
         if s.hasPrefix("/") { return rule.host.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + s }
         return base + s
+    }
+
+    /// 只做变量替换、**不补 host** —— 表单体和请求头不是 URL，不能走 fill
+    private func fillText(_ template: String, kw: String? = nil, page: Int? = nil, extra: [String: String] = [:]) -> String {
+        var s = template
+        s = s.replacingOccurrences(of: "{host}", with: rule.host)
+        if let kw {
+            let enc = kw.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? kw
+            s = s.replacingOccurrences(of: "{kw}", with: enc)
+        }
+        if let page { s = s.replacingOccurrences(of: "{page}", with: "\(page)") }
+        for (k, v) in extra { s = s.replacingOccurrences(of: "{\(k)}", with: v) }
+        return s
     }
 
     private func fetch(_ url: String, gbk: Bool = false, desktop: Bool? = nil,
@@ -216,7 +230,7 @@ final class RuleSource: BookSource {
         let desktop = (sr.ua ?? rule.ua ?? "mobile").lowercased() == "desktop"
         var form: String? = nil
         if (sr.method ?? "get").lowercased() == "post" {
-            form = fill(sr.body ?? "searchword={kw}", kw: keyword, page: page)
+            form = fillText(sr.body ?? "searchword={kw}", kw: keyword, page: page)
         }
         let html = try await fetch(url, gbk: gbk, desktop: desktop, form: form,
                                    extraHeaders: sr.headers ?? [:])
@@ -336,7 +350,10 @@ final class RuleSource: BookSource {
 
         var lastError: Error = SourceError.parse("按规则没取到音频地址")
         let tries = max(1, a.retries ?? 1)
-        for _ in 0..<tries {
+        for attempt in 0..<tries {
+            if attempt > 0, let d = a.retryDelayMs, d > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(d) * 1_000_000)
+            }
             do {
                 let raw = try await resolveAudio(a, episode: episode, referer: referer)
                 if !raw.isEmpty {

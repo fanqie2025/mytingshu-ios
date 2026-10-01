@@ -87,14 +87,19 @@ final class HTMLNode {
         var s = simple.trimmingCharacters(in: .whitespaces)
         if s.isEmpty || s == "*" { return true }
 
-        // 属性过滤 [attr] / [attr=v] / [attr*=v]
+        // 属性过滤 [attr] / [attr=v] / [attr*=v]（值两边的引号可有可无）
         var attrChecks: [(String, String?, Bool)] = [] // name, value, contains
         while let open = s.firstIndex(of: "["), let close = s[open...].firstIndex(of: "]") {
             let inside = String(s[s.index(after: open)..<close])
+            func unquote(_ t: String) -> String {
+                t.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            }
             if let star = inside.range(of: "*=") {
-                attrChecks.append((String(inside[..<star.lowerBound]).lowercased(), String(inside[star.upperBound...]), true))
+                attrChecks.append((String(inside[..<star.lowerBound]).lowercased(),
+                                   unquote(String(inside[star.upperBound...])), true))
             } else if let eq = inside.firstIndex(of: "=") {
-                attrChecks.append((String(inside[..<eq]).lowercased(), String(inside[inside.index(after: eq)...]), false))
+                attrChecks.append((String(inside[..<eq]).lowercased(),
+                                   unquote(String(inside[inside.index(after: eq)...])), false))
             } else {
                 attrChecks.append((inside.lowercased(), nil, false))
             }
