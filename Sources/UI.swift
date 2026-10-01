@@ -492,6 +492,7 @@ struct SettingsView: View {
     @State private var showRate = false
     @State private var showSleep = false
     @State private var showDiag = false
+    @State private var showAbs = false
     @State private var importText = ""
     @State private var importURL = ""
     @State private var importMsg = ""
@@ -502,16 +503,23 @@ struct SettingsView: View {
             List {
                 Section("源管理") {
                     ForEach(store.all, id: \.id) { src in
-                        Toggle(isOn: Binding(
-                            get: { settings.enabled.contains(src.id) },
-                            set: { on in
-                                if on { settings.enabled.insert(src.id) } else { settings.enabled.remove(src.id) }
-                            })) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(src.name)
-                                    Text(src.host).font(.caption2).foregroundColor(.secondary)
-                                }
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(src.name)
+                                Text(src.host).font(.caption2).foregroundColor(.secondary)
                             }
+                            Spacer()
+                            if src.id == AbsSource.sourceId {
+                                Button("配置") { showAbs = true }
+                                    .font(.footnote)
+                            }
+                            Toggle("", isOn: Binding(
+                                get: { settings.enabled.contains(src.id) },
+                                set: { on in
+                                    if on { settings.enabled.insert(src.id) } else { settings.enabled.remove(src.id) }
+                                }))
+                            .labelsHidden()
+                        }
                     }
                     Button {
                         showImport = true
@@ -597,6 +605,7 @@ struct SettingsView: View {
             .sheet(isPresented: $showImport) { importSheet }
             .sheet(isPresented: $showSleep) { SleepSheet() }
             .sheet(isPresented: $showDiag) { DiagnosticsView() }
+            .sheet(isPresented: $showAbs) { AbsConfigSheet() }
         }
     }
 
@@ -1242,5 +1251,140 @@ struct DiagnosticsView: View {
 
     private var buildNumber: String {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+    }
+}
+
+// MARK: - 我的书架（正在听 + 继续收听 + 收藏）
+
+struct BookshelfView: View {
+    @ObservedObject private var library = LibraryStore.shared
+    @ObservedObject private var player = PlayerEngine.shared
+
+    var body: some View {
+        NavigationView {
+            List {
+                if let book = player.book, let ep = player.currentEpisode {
+                    Section("正在播放") {
+                        HStack(spacing: 10) {
+                            AsyncImage(url: URL(string: book.cover)) { img in
+                                img.resizable().aspectRatio(contentMode: .fill)
+                            } placeholder: { Color(.secondarySystemBackground) }
+                            .frame(width: 46, height: 62).clipShape(RoundedRectangle(cornerRadius: 6))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(book.title).font(.subheadline).lineLimit(1)
+                                Text(ep.title.isEmpty ? "第 \(player.index + 1) 集" : ep.title)
+                                    .font(.caption).foregroundColor(.secondary).lineLimit(1)
+                            }
+                            Spacer()
+                            Button { player.toggle() } label: {
+                                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                    .font(.system(size: 30))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                Section("继续收听") {
+                    ForEach(library.history.prefix(5)) { h in
+                        Button { resume(h) } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(h.book.title).font(.subheadline).lineLimit(1)
+                                Text("听到：" + (h.episodeTitle.isEmpty ? "第 \(h.episodeIndex + 1) 集" : h.episodeTitle))
+                                    .font(.caption).foregroundColor(.secondary).lineLimit(1)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if library.history.isEmpty {
+                        Text("还没有收听记录").font(.caption).foregroundColor(.secondary)
+                    }
+                }
+
+                Section("收藏") {
+                    ForEach(library.favorites) { b in
+                        NavigationLink(destination: BookDetailView(book: b)) { BookRow(book: b) }
+                    }
+                    if library.favorites.isEmpty {
+                        Text("还没有收藏").font(.caption).foregroundColor(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("我的书架")
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private func resume(_ h: LibraryStore.HistoryEntry) {
+        Task {
+            guard let src = SourceRegistry.source(withId: h.book.sourceId) else { return }
+            if let d = try? await src.detail(for: h.book) {
+                PlayerEngine.shared.play(book: h.book, episodes: d.episodes, startAt: h.episodeIndex)
+            }
+        }
+    }
+}
+
+// MARK: - Audiobookshelf 配置
+
+struct AbsConfigSheet: View {
+    @ObservedObject var cfg = AbsConfig.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var server = ""
+    @State private var token = ""
+    @State private var result = ""
+    @State private var busy = false
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("服务器地址") {
+                    TextField("http://192.168.10.111:13378", text: $server)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                        .keyboardType(.URL)
+                }
+                Section("API Token") {
+                    TextField("ABS 里 设置 → 用户 → API Token", text: $token)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                }
+                Section {
+                    Button { Task { await test() } } label: {
+                        if busy { HStack { ProgressView(); Text("测试中…") } } else { Text("保存并测试连接") }
+                    }
+                    if !result.isEmpty {
+                        Text(result).font(.caption)
+                    }
+                }
+                Section {
+                    Text("填好后，你的 ABS 书库会作为一个源出现在「书源」和「搜索」里；音频直接从你的服务器播放，不经过任何第三方。")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("Audiobookshelf")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("保存") { save(); dismiss() } }
+            }
+            .onAppear { server = cfg.server; token = cfg.token }
+        }
+    }
+
+    private func save() {
+        cfg.server = server.trimmingCharacters(in: .whitespacesAndNewlines)
+        cfg.token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func test() async {
+        save()
+        busy = true
+        do {
+            result = "✅ " + (try await AbsSource().testConnection())
+        } catch {
+            result = "❌ " + ((error as? LocalizedError)?.errorDescription ?? "\(error)")
+        }
+        busy = false
     }
 }

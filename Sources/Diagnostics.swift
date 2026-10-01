@@ -129,7 +129,7 @@ final class Diagnostics: ObservableObject {
     }
 }
 
-/// 默认的订阅地址（和 README 里一致）
-let defaultSubscriptionURL = "https://cdn.jsdelivr.net/gh/fanqie2025/mytingshu-ios@main/subscription/sources.json"
+/// 默认订阅地址：本 App 不内置任何书源，这里留空，由用户粘贴自己的订阅链接
+let defaultSubscriptionURL = ""
 
 

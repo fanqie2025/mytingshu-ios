@@ -1,5 +1,14 @@
 import Foundation
 
+// MARK: - 源查找（统一走 SourceStore）
+
+enum SourceRegistry {
+    @MainActor static var all: [any BookSource] { SourceStore.shared.all }
+    @MainActor static func source(withId id: String) -> (any BookSource)? {
+        SourceStore.shared.all.first { $0.id == id }
+    }
+}
+
 // MARK: - 书源仓库：内置（原生 + 打包的 JSON 规则）+ 用户导入
 
 @MainActor
@@ -12,20 +21,12 @@ final class SourceStore: ObservableObject {
     /// 打包在 App 里的 JSON 规则（Resources/source_*.json）
     @Published private(set) var bundled: [SourceRule] = []
 
-    /// 代码里写死的原生源（接口复杂、规则表达不了的）
+    /// 内置源：**只保留「连你自己服务器」的 Audiobookshelf**。
+    ///
+    /// 抓站源（22听书/书音FM/酷我/爱听书/13听/乐听/恋听/29听…）一律不打包进 App，
+    /// 全部通过「设置 → 导入书源」用订阅地址或粘贴 JSON 在线导入 —— App 本身只是个播放器外壳。
     let native: [any BookSource] = [
-        Ting22Source(),
-        MekuiSource(),
-        KuwoSource(),
-        PtcmsSource(id: "itingshu", name: "爱听书", host: "https://www.itingshu.net",
-                    dirPrefix: "/itingshus/",
-                    desc: "爱听书（六千多本）。列表用手机 UA、章节目录与播放页用桌面 UA；音频走签名接口，遇限流会自动换新签名重试。"),
-        PtcmsSource(id: "ting13", name: "13听书网", host: "https://www.ting13.cc",
-                    dirPrefix: "/tingdirs/",
-                    desc: "13听书网（与爱听书同一个书库）。"),
-        LetingSource(),
-        Ting55Source(),
-        Ting29Source()
+        AbsSource()
     ]
 
     /// 合并所有源并按 id 去重，优先级：原生源 > 订阅导入的 > 内置打包的

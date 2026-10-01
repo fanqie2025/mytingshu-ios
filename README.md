@@ -1,148 +1,145 @@
-# 我的听书 · iOS 版
+# 我的听书 · iOS 版（播放器外壳）
 
-一个自用的 iOS 听书播放器：**多源聚合搜索 + 分类发现 + 章节播放 + 收藏历史 + 书源导入**。
-源在手机端直连各听书站，不需要服务器。
+一个自用的 iOS 听书播放器：**App 本身只是外壳，不内置任何书源**。
+书源在 App 内「设置 → 导入书源」用**订阅地址**或**粘贴 JSON** 在线导入；
+另外内置一个 **Audiobookshelf** 连接器（连你自己的服务器）。
 
 - 目标系统：**iOS 15 / 16**（arm64）
 - 安装方式：**TrollStore（巨魔）直接装未签名 IPA**
-- 构建方式：**GitHub Actions 云端 macOS 编译**（本机没有 Mac）
-- 无第三方依赖：编译器直接 `swiftc` 组装 `.app`，不用 Xcode 工程、不用 CocoaPods/SPM
+- 构建：GitHub Actions 云端 macOS 编译（本机没有 Mac），无第三方依赖
 
-## 怎么装（巨魔）
+## 安装（巨魔）
 
-1. 手机浏览器打开本仓库 **Releases → latest**，下载 `MyTingShu.ipa`
-2. 用 **TrollStore** 打开这个 ipa → Install
-3. 首次进 App：`设置 → 源管理` 里挑要用的源
-
-> 也可以从 Actions 的 Artifacts 下载（需登录 GitHub）。
-
-## 怎么导入书源（跟「我的听书」的订阅一样）
-
-`设置 → 导入书源 → 粘贴订阅地址`，填这条（仓库里的订阅文件，已用 `tools/verify_subscription.py` 全链路验证过）：
+1. 手机浏览器打开 **Releases → latest**，下载 `MyTingShu.ipa`
+2. 用 **TrollStore** 打开 → Install
+3. 进 App：`设置 → 源管理` 里能看到内置的 Audiobookshelf；抓站书源要自己导入
 
 ```
-https://cdn.jsdelivr.net/gh/fanqie2025/mytingshu-ios@main/subscription/sources.json
+https://github.com/fanqie2025/mytingshu-ios/releases/latest/download/MyTingShu.ipa
 ```
 
-备用地址（jsDelivr 被墙时用）：
+## 界面
 
-```
-https://raw.githubusercontent.com/fanqie2025/mytingshu-ios/main/subscription/sources.json
-```
+底部五个页签：**书架 / 搜索 / 书源 / 历史 / 设置**
 
-导入后源会自动打开，直接在「搜索」里用。也可以把书源 JSON 直接粘进同一个页面。
-
-**当前订阅里的源：**
-
-| 源 | 说明 |
+| 页签 | 内容 |
 | --- | --- |
-| 有听网 | 搜索 / 10 个分类 / 章节 / 播放全部实测通过（音频走 POST 接口，带 Referer 防盗链头） |
-| 275听书 | 搜索 / 章节 / 播放实测通过（要先访问首页拿 session，规则里用 `warmup` 预热；站方个别书的音频源已失效，换一本即可） |
+| 书架 | 正在播放、继续收听（最近 5 条历史，点一下续播）、收藏 |
+| 搜索 | 对所有已启用源聚合搜索（逐源 20 秒超时，互不拖累）；可一键清空 |
+| 书源 | 各源的分类发现入口 |
+| 历史 | 全部收听记录，可清空 |
+| 设置 | 源管理（启用/禁用 + Audiobookshelf 配置）、导入书源、播放、缓存、诊断 |
 
-> 每次 push 都会在 CI 里跑两轮校验，全绿才继续构建：
-> 1. `verify-sources`（**阻塞构建**）：跑 `tools/verify_subscription.py`，把订阅文件里每个源走一遍 搜索 → 分类 → 章节 → 音频直链 → Range 探测音频（要求 206 + audio/*）；
-> 2. `live-sources`（**不阻塞**，只做可见性）：跑 `tools/live_tests/*_verify.py` —— 每个原生源的真实链路脚本（爱听书 / 13听书网 / 酷我畅听 / 275听书 / 有听网 / 乐听网 / 单田芳评书网），各自打印 6 项 OK/FAIL。
->
-> 这些脚本也能在本机直接跑：`python3 tools/live_tests/itingshu_verify.py`。
+## 导入书源
 
-订阅里一个源的格式（字段都可选，够用就行）：
+`设置 → 源管理 → 导入书源`：
+
+- **订阅地址**：填一个返回书源 JSON 的 URL；
+- **粘贴 JSON**：直接把书源 JSON 贴进去（支持单个对象、数组，或 `{"sources":[…]}` 包裹）。
+
+一个书源条目的格式（字段都可选）：
 
 ```json
 {
-  "id": "ting29",
-  "name": "29听书网",
-  "host": "https://m.ting29.com",
+  "id": "ting15",
+  "name": "有听网",
+  "host": "https://www.ting15.com",
   "encoding": "utf-8",
+  "ua": "desktop",
   "search": {
-    "url": "{host}/search.php?searchword={kw}&page={page}",
-    "list": "ul.row-b > li",
-    "title": "h2 a.f-bold@text",
-    "urlRule": "h2 a.f-bold@href",
-    "cover": "img@src",
-    "artist": "span.fr@text",
-    "intro": "p.f-gray@text"
+    "url": "{host}/?s=ting-search-wd-{kw}.html",
+    "pageUrl": "{host}/?s=ting-search-wd-{kw}-p-{page}.html",
+    "list": ".category-list ul > li",
+    "title": ".info h4 > a@title",
+    "urlRule": ".info h4 > a@href",
+    "cover": ".img img@src",
+    "artist": ".info@regex(播音：([^<]*))"
   },
-  "categories": [
-    {"title": "玄幻", "url": "{host}/html/221.html", "group": "小说"}
-  ],
+  "categories": [{ "title": "武侠玄幻", "url": "{host}/wuxiaxuanhuan/", "group": "有声小说" }],
   "detail": {
-    "episodes": "#yuedu ul.ul-36 li a",
-    "episodeTitle": "@title",
-    "episodeUrl": "@href",
-    "intro": "p.f-gray@text",
-    "cover": ".style-img img@src"
+    "episodes": ".playlist .plist ul > li > a",
+    "episodeTitle": "@text",
+    "episodeUrl": "@href"
   },
-  "audio": {"type": "regex", "pattern": "var\\s+now\\s*=\\s*\"([^\"]+)\""},
-  "verification": {"url": "{host}/search.php?searchword={kw}"}
+  "audio": {
+    "type": "post",
+    "url": "{host}/?s=api-getneoplay",
+    "metaFrom": { "bookId": "_b", "isPay": "_p", "page": "_cp" },
+    "body": "bookId={bookId}&isPay={isPay}&page={page}",
+    "field": "url",
+    "referer": "{host}/"
+  }
 }
 ```
 
-说明：
-
 | 字段 | 含义 |
 | --- | --- |
-| `host` | 站点根地址；模板里可用 `{host}` |
-| `encoding` | `utf-8`（默认）或 `gbk`（中文老站） |
-| `search.url` | 搜索地址模板，支持 `{kw}`（自动 URL 编码）、`{page}` |
-| `search.list` | 结果条目的容器**选择器** |
-| `search.title` 等 | 取值规则：`选择器@text` / `@href` / `@src` / `@attr(title)` |
-| `categories` | 分类页列表（`{host}` 前缀可省） |
-| `detail.episodes` | 章节链接选择器；`episodeTitle`/`episodeUrl` 取每条的标题与链接 |
-| `audio.type` | `regex`（在章节页跑正则，取第 1 个分组）/ `direct`（章节链接本身就是音频）/ `json`（接口字段）/ `redirect`（跟随跳转） |
-| `verification.url` | 搜索要先过验证码时填（App 会弹内置浏览器让你过一次） |
+| `host` | 站点根地址，模板里可用 `{host}` |
+| `encoding` | `utf-8`（默认）/ `gbk` |
+| `ua` | `mobile`（默认）/ `desktop`（有些站对手机 UA 跳转或限流） |
+| `warmup` | 首次请求前先 GET 这个地址拿 Cookie/session |
+| `search.url` / `pageUrl` | 搜索地址模板（`{kw}`、`{page}`） |
+| `search.list` | 结果条目容器**选择器** |
+| `search.title` 等 | 取值规则：`选择器@text` / `@href` / `@src` / `@attr(名)` / `@regex(模式)` |
+| `detail.episodes` | 章节链接选择器；`episodeTitle` / `episodeUrl` 取每条标题与链接 |
+| `audio.type` | `regex`（章节页跑正则）/ `direct`（章节链接就是音频）/ `json`（接口字段）/ `redirect` / `post`（表单换地址，配 `metaFrom`+`body`+`field`） |
+| `verification.url` | 搜索要先过验证码时填（App 会弹内置浏览器让过一次） |
 
-选择器支持：`tag`、`.class`、`#id`、`[attr]`、`[attr=v]`、`[attr*=v]`、后代（空格）、子代（`>`）。
+选择器支持 `tag` / `.class` / `#id` / `[attr]` / `[attr=v]` / `[attr*=v]` / 后代（空格）/ 子代（`>`）。
 
-## 已内置的源
+> 我自用的那批书源（各站具体实现 + 逐站校验脚本）**不在本仓库**，单独放在私有仓库；
+> 本仓库只保留这份格式说明。抓站源会随站点改版失效，私库里配有校验脚本。
 
-| 源 | 说明 |
-| --- | --- |
-| 22听书（一夜幻听网） | 搜索需过一次图片验证码；分类/章节/播放免验证 |
-| 书音FM（mekui） | JSON 接口，稳定 |
-| 酷我畅听 | 免费曲目可直接播；付费的只有 30 秒试听（标题会标「试听」） |
-| 爱听书 / 13听书网 | 两家同一书库（各六千多本），搜索/分类/章节/播放全通；音频走签名接口，被限流会自动换签名重试 |
-| 有听网 / 275听书 / 单田芳评书网 | 来自订阅文件，构建时一并打进 App（装完即可用；导入订阅会用订阅里的版本覆盖） |
+## Audiobookshelf
 
-其余站点用上面的 JSON 书源格式自行导入（或直接用订阅地址）。
+`设置 → 源管理 → Audiobookshelf → 配置`：填服务器地址（如 `http://192.168.10.111:13378`）和 **API Token**
+（ABS 里 设置 → 用户 → API Token），点「保存并测试连接」。
+
+之后你的 ABS 书库会作为一个源出现在「书源」和「搜索」里，音频直接从你的服务器播放。
 
 ## 基础功能
 
 | 功能 | 在哪 |
 | --- | --- |
-| **自定义倍速 0.50x–3.00x**（滑块，0.05 步进；也可点常用档位） | 播放页「倍速」/ 设置 → 播放 |
-| **跳过片头 / 跳过片尾**（每集自动跳，片尾到点自动下一集） | 播放页「片头片尾」/ 设置 → 播放 |
-| **定时关闭**（15/30/45/60/90/120 分钟，或自定义 5–300 分钟） | 播放页「定时」/ 设置 → 播放 |
-| **缓存下集**（播放时自动把后面 1–3 集下到本地；章节列表可单集手动缓存；播放优先用本地文件 = 离线也能听） | 设置 → 缓存 / 章节列表右侧按钮 |
-| 后台播放、锁屏控制（播放/暂停/上一集/下一集/拖进度） | 自动 |
-| 15 秒快退 / 快进 | 播放页 |
-| 收藏 / 历史（点历史直接续听） | 底部「收藏」「历史」 |
-| 多源聚合搜索、分类发现 | 底部「搜索」「书源」 |
-| 导入书源（订阅地址 / 粘贴 JSON） | 设置 → 源管理 |
+| 自定义倍速 0.50x–3.00x（播放页直接滑） | 播放页「倍速」/ 设置 |
+| 跳过片头 / 片尾（每集自动跳，片尾到点自动下一集） | 播放页「片头片尾」/ 设置 |
+| 定时关闭（5–300 分钟）+ 听完本集停止 | 播放页「定时」/ 设置 |
+| 选集（播放页「选集」→ 输入集号直接跳） | 播放页 |
+| 缓存：默认**关**；章节列表可单集手动缓存，播放优先用本地文件 | 章节列表 ↓ / 设置 → 缓存 |
+| 15 秒快退/快进、后台播放、锁屏控制 | 播放页 / 自动 |
+| 收藏、历史、书架 | 底部页签 |
+| 诊断（逐源测搜索/详情/音频，结果可复制） | 设置 → 诊断 |
 
-## 本地/云端构建
+## 构建
 
 ```bash
-bash build_ipa.sh          # 需要 macOS + Xcode 命令行工具
-# 产物：build/MyTingShu.ipa
+bash build_ipa.sh          # 需要 macOS + Xcode 命令行工具；产物 build/MyTingShu.ipa
 ```
 
-GitHub Actions（`.github/workflows/ios.yml`）会在每次 push 时自动构建，
-把 IPA 传到 Artifacts，并更新 `latest` Release。
+GitHub Actions 每次 push 自动编译 + 产物自检（Mach-O 必须是 iOS arm64 可执行文件），并更新 `latest` Release。
+
+## 免责声明
+
+- 本项目是**个人自用的播放器外壳**，**不提供、不托管、不传播任何音频内容**；
+- 书源是**使用者自行导入**的第三方站点解析规则，与本仓库作者无关；请只导入你有权访问的内容；
+- 仅供**本地测试与个人学习**，请勿用于商业用途或大规模抓取（会给源站带来压力）；
+- 音频版权归原站与版权方所有；若权利方认为本仓库内容不妥，请提 Issue，我会立刻移除。
 
 ## 目录
 
 ```
-Sources/             Swift 源码
-  App.swift          入口 + 底部 Tab
+Sources/
+  App.swift          入口 + 底部页签
   Models.swift       数据模型 + 源协议
-  HTTP.swift         网络 + GBK 解码 + HTML 工具
+  HTTP.swift         网络 + 编码 + 超时 + 守卫解 cookie
   MiniHTML.swift     迷你 HTML 解析 + CSS 选择器（书源规则用）
   RuleSource.swift   JSON 书源 → 可执行源
   SourceStore.swift  源仓库 + 导入/删除
-  Sources.swift      原生源（22听书）
-  KuwoSource.swift   酷我畅听
+  AbsSource.swift    Audiobookshelf 连接器
   Player.swift       播放引擎 + 收藏/历史
+  Cache.swift        缓存
+  Diagnostics.swift  诊断
   UI.swift           界面
 Resources/           Info.plist + 图标
+tools/check_macho.py 产物自检
 ```
-

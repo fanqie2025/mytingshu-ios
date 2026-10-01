@@ -1,6 +1,7 @@
 name: build-ios-ipa
 
 # 云端 macOS 编译 → 未签名 IPA（巨魔 TrollStore 直接安装）
+# 注意：本仓库只是 App 外壳，不含任何书源；书源在 App 内「设置 → 导入书源」在线订阅导入。
 on:
   push:
     branches: [ main, master ]
@@ -10,33 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  verify-sources:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: 校验订阅书源（搜索→详情→章节→音频直链→音频可播）
-        run: python3 tools/verify_subscription.py subscription/sources.json
-
-  # 原生源的「真实链路」校验：每个源跑一遍搜索→详情→章节→音频(206)。
-  # 这些脚本来自各源的逆向，跑在境外 runner 上可能因网络抖动失败 ——
-  # 所以这一 job 只做「可见性」，不阻塞 IPA 构建（build 不依赖它）。
-  live-sources:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: 逐个跑原生源的真实链路校验
-        run: |
-          set +e
-          for f in tools/live_tests/*_verify.py; do
-            echo "=================================================="
-            echo "▶ $f"
-            timeout 180 python3 "$f" || echo "⚠️ $f 未通过（可能是境外网络问题，本机复跑确认）"
-          done
-          exit 0
-
   build:
-    needs: verify-sources
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -57,11 +32,7 @@ jobs:
           grep -q "arm64" /tmp/macho.txt || { echo "不是 arm64"; exit 1; }
           grep -q "LC_MAIN" /tmp/macho.txt || { echo "缺入口点"; exit 1; }
           test -f ipa_check/Payload/MyTingShu.app/Info.plist || { echo "缺 Info.plist"; exit 1; }
-          test -f ipa_check/Payload/MyTingShu.app/sources.json || { echo "缺内置书源"; exit 1; }
           echo "产物自检通过"
-
-      - name: 清理 jsDelivr 缓存（让订阅文件立刻生效）
-        run: curl -s "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/subscription/sources.json" || true
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
@@ -77,8 +48,7 @@ jobs:
           name: 我的听书 iOS · 最新构建
           body: |
             未签名 IPA，用 **TrollStore（巨魔）** 直接安装。
+            本仓库只是播放器外壳，不含任何书源；书源请在 App 内「设置 → 导入书源」导入。
             构建号：${{ github.run_number }}
           files: build/MyTingShu.ipa
           make_latest: true
-
-

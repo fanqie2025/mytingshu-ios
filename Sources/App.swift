@@ -17,9 +17,9 @@ struct MyTingShuApp: App {
 struct RootView: View {
     var body: some View {
         TabView {
-            HomeView().tabItem { Label("书源", systemImage: "books.vertical") }
+            BookshelfView().tabItem { Label("书架", systemImage: "books.vertical.fill") }
             SearchView().tabItem { Label("搜索", systemImage: "magnifyingglass") }
-            FavoritesView().tabItem { Label("收藏", systemImage: "heart") }
+            HomeView().tabItem { Label("书源", systemImage: "square.grid.2x2") }
             HistoryView().tabItem { Label("历史", systemImage: "clock.arrow.circlepath") }
             SettingsView().tabItem { Label("设置", systemImage: "gearshape") }
         }
