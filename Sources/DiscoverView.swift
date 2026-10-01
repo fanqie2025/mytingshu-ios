@@ -66,7 +66,10 @@ struct DiscoverView: View {
         count: 3
     )
 
-    private var sources: [any BookSource] { settings.enabledSources }
+    /// 只列**能按分类浏览**的源（`BookSource.discoverable`）。
+    /// 不加这个过滤，275听书 / 爱听书 / 13听书网 / 酷我畅听 这些只有搜索入口的源会出现在分段条里，
+    /// 点进去要么报「分类获取失败」要么一片空白（用户真机截图里 ABS 那一栏就是这种形态）。
+    private var sources: [any BookSource] { settings.enabledSources.filter { $0.discoverable } }
 
     private var currentSource: (any BookSource)? {
         if sources.indices.contains(sourceIndex) { return sources[sourceIndex] }
@@ -77,12 +80,21 @@ struct DiscoverView: View {
         NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    if sources.isEmpty {
+                    if settings.enabledSources.isEmpty {
                         StateView(
                             kind: .empty,
                             title: "还没有启用任何源",
                             message: "去「我的 → 源管理」导入或启用书源",
                             actionTitle: "去导入书源",
+                            action: { onGoToMine() }
+                        )
+                        .padding(.top, 80)
+                    } else if sources.isEmpty {
+                        StateView(
+                            kind: .empty,
+                            title: "没有可按分类浏览的源",
+                            message: "已启用的源都只能搜索找书；去「书架」顶部的搜索框，或在「我的 → 源管理」再启用带分类的源",
+                            actionTitle: "去源管理",
                             action: { onGoToMine() }
                         )
                         .padding(.top, 80)
@@ -98,6 +110,14 @@ struct DiscoverView: View {
                                 message: menusError,
                                 actionTitle: "重试",
                                 action: { Task { await reload() } }
+                            )
+                        } else if menus.isEmpty {
+                            StateView(
+                                kind: .empty,
+                                title: "这个源没有分类",
+                                message: "它只能通过搜索找书：去「书架」顶部的搜索框",
+                                actionTitle: nil,
+                                action: nil
                             )
                         } else {
                             categoryGrid
@@ -161,7 +181,9 @@ struct DiscoverView: View {
     // MARK: 分类宫格
 
     private var categoryGrid: some View {
-        let categories = dedupedCategories(limit: 12)
+        // 上限 30：当前分类最多的源是 22听书（24 个），30 覆盖得住；
+        // 原来写 12 会**静默丢掉**一半分类，超过 30 的源出现时再加「全部」入口
+        let categories = dedupedCategories(limit: 30)
         return Group {
             if !categories.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
