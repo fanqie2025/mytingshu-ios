@@ -2,7 +2,9 @@
 
 - 计划：`plans/2026-10-02-ios-ui-redesign.md`
 - 设计：`wodetingshu/ios/docs/specs/2026-10-02-ui-redesign-design.md`
-- 构建标识：**0.2.0 (2)**，分支 `feat/ui-redesign-slice1`，commit `653b09f`
+- 构建标识：**0.2.1 (3)**，分支 `feat/ui-redesign-slice1` → `main`
+  - 首轮验证装的是 **0.2.0 (2)**（commit `653b09f`）：界面已可用，但含两处并发崩溃路径（发现页加载中切源/点重试重叠）
+  - **0.2.1 (3)** = 0.2.0 + 评审修复（崩溃/空态动作/骨架/分类网格导航栏）+ 引擎增强 + 发现页按 `discoverable` 过滤源
 - 装机方式：TrollStore 安装未签名 IPA（本轮下限 iOS 16.0）
 
 **验收人**：用户（真机）｜**记录人**：DSH｜**状态**：待填
