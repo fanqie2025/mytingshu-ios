@@ -61,12 +61,36 @@ final class PlayerEngine: ObservableObject {
 
     // MARK: 播放
 
+    /// 片头片尾按「专辑」记（原版行为）；没设过就用全局默认值
+    private var perBookSkip: [String: [Double]] {
+        get { UserDefaults.standard.object(forKey: "skip_per_book_v1") as? [String: [Double]] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: "skip_per_book_v1") }
+    }
+
+    /// 换书时把这本书自己的片头片尾读进来
+    func loadSkipForCurrentBook() {
+        guard let book else { return }
+        if let v = perBookSkip[book.bookURL], v.count >= 2 {
+            skipIntro = v[0]
+            skipOutro = v[1]
+        }
+    }
+
+    /// 把当前书调好的片头片尾存下来（只对这本专辑有效）
+    func saveSkipForCurrentBook() {
+        guard let book else { return }
+        var d = perBookSkip
+        d[book.bookURL] = [skipIntro, skipOutro]
+        perBookSkip = d
+    }
+
     func play(book: Book, episodes: [Episode], startAt: Int = 0, autoPlay: Bool = true) {
         guard !episodes.isEmpty else { return }
         self.book = book
         self.episodes = episodes
         self.index = min(max(0, startAt), episodes.count - 1)
         self.sourceForCurrent = SourceRegistry.source(withId: book.sourceId)
+        loadSkipForCurrentBook()
         LibraryStore.shared.markPlayed(book: book, episode: self.index,
                                        title: episodes[min(max(0, startAt), episodes.count - 1)].title)
         Task { await load(autoPlay: autoPlay) }
@@ -325,6 +349,8 @@ final class LibraryStore: ObservableObject {
     }
 
     func clearHistory() { history = []; save() }
+
+    func clearFavorites() { favorites = []; save() }
 
     private func save() {
         let enc = JSONEncoder()

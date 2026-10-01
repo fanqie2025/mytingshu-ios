@@ -430,6 +430,16 @@ struct BookDetailView: View {
         }
         .navigationTitle(book.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    library.toggleFavorite(book)
+                } label: {
+                    Image(systemName: library.isFavorite(book) ? "star.fill" : "star")
+                        .foregroundColor(library.isFavorite(book) ? .orange : .accentColor)
+                }
+            }
+        }
         .task { await load() }
     }
 
@@ -791,9 +801,11 @@ struct PlayerView: View {
                         Button("自定义…") { showSleep = true }
                     } label: { toolLabel("timer", sleepTitle) }
 
+                    // 顺序与原版一致：定时 / 列表 / 倍速 / 片头片尾
+                    Button { showEpisodes = true } label: { toolLabel("list.bullet", "列表") }
+
                     Button { withAnimation { showRate.toggle() } } label: { toolLabel("speedometer", rateLabel(player.rate)) }
 
-                    Button { showEpisodes = true } label: { toolLabel("list.bullet", "选集 \(player.index + 1)/\(player.episodes.count)") }
                     Button { showSkip = true } label: { toolLabel("arrow.right.to.line", "片头片尾") }
                 }
                 .buttonStyle(.plain)
@@ -1164,27 +1176,61 @@ struct SkipSettingsSheet: View {
 
     var body: some View {
         NavigationView {
-            Form {
-                Section("自动跳过") {
-                    Picker("片头", selection: Binding(get: { Int(player.skipIntro) },
-                                                     set: { player.skipIntro = Double($0) })) {
-                        Text("不跳过").tag(0); Text("5 秒").tag(5); Text("10 秒").tag(10)
-                        Text("15 秒").tag(15); Text("30 秒").tag(30); Text("45 秒").tag(45); Text("60 秒").tag(60)
-                    }
-                    Picker("片尾", selection: Binding(get: { Int(player.skipOutro) },
-                                                     set: { player.skipOutro = Double($0) })) {
-                        Text("不跳过").tag(0); Text("5 秒").tag(5); Text("10 秒").tag(10)
-                        Text("15 秒").tag(15); Text("30 秒").tag(30); Text("45 秒").tag(45); Text("60 秒").tag(60)
-                    }
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("跳过片头片尾").font(.largeTitle.bold()).foregroundColor(.blue)
+                    Text("设置后只对本专辑有效").font(.subheadline).foregroundColor(.secondary)
                 }
-                Section {
-                    Text("每集开始时会自动跳过设定的「片头」秒数；播放到离结尾还剩「片尾」秒数时，自动进入下一集。")
-                        .font(.caption).foregroundColor(.secondary)
+                .padding(.top, 10)
+
+                stepRow(title: "跳过片头", value: player.skipIntro) { player.skipIntro = $0 }
+                stepRow(title: "跳过片尾", value: player.skipOutro) { player.skipOutro = $0 }
+
+                Text("每集开始自动跳过「片头」秒数；播到离结尾还剩「片尾」秒数时自动下一集。")
+                    .font(.caption).foregroundColor(.secondary)
+
+                Spacer()
+
+                Button { dismiss() } label: {
+                    Text("关闭").font(.title3).frame(maxWidth: .infinity)
                 }
+                .padding(.bottom, 10)
             }
-            .navigationTitle("片头片尾")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+            .padding(.horizontal, 22)
+            .navigationBarHidden(true)
+            .onDisappear { player.saveSkipForCurrentBook() }
+        }
+    }
+
+    /// 「跳过片头 N 秒」＋ 左 −1秒 / 滑块 / 右 +1秒
+    private func stepRow(title: String, value: Double, onChange: @escaping (Double) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(title) \(Int(value)) 秒").font(.title3.bold())
+            HStack(spacing: 8) {
+                Button { onChange(max(0, value - 1)) } label: {
+                    VStack(spacing: 0) {
+                        Image(systemName: "minus").font(.caption)
+                        Text("1秒").font(.caption2)
+                    }
+                    .frame(width: 34)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.blue)
+
+                Slider(value: Binding(get: { value },
+                                      set: { onChange($0.rounded()) }),
+                       in: 0...120, step: 1)
+
+                Button { onChange(min(120, value + 1)) } label: {
+                    VStack(spacing: 0) {
+                        Image(systemName: "plus").font(.caption)
+                        Text("1秒").font(.caption2)
+                    }
+                    .frame(width: 34)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.blue)
+            }
         }
     }
 }
@@ -1207,8 +1253,8 @@ let rateOptions: [RateOption] = [
 
 /// 倍速显示文本（支持任意自定义值）
 func rateLabel(_ r: Float) -> String {
-    if let hit = rateOptions.first(where: { abs($0.value - r) < 0.01 }) { return hit.label }
-    return String(format: "%.2fx", r)
+    // 倍速统一保留两位小数（1.00x / 1.25x / 1.50x …）
+    String(format: "%.2fx", r)
 }
 
 // MARK: - 诊断页（源测试 + 订阅链接测试 + 复制报告）
@@ -1309,74 +1355,67 @@ struct DiagnosticsView: View {
     }
 }
 
-// MARK: - 我的书架（正在听 + 继续收听 + 收藏）
+// MARK: - 我的书架（封面网格，仿原版）
 
 struct BookshelfView: View {
     @ObservedObject private var library = LibraryStore.shared
     @ObservedObject private var player = PlayerEngine.shared
 
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+
     var body: some View {
         NavigationView {
-            List {
-                if let book = player.book, let ep = player.currentEpisode {
-                    Section("正在播放") {
-                        HStack(spacing: 10) {
-                            AsyncImage(url: URL(string: book.cover)) { img in
-                                img.resizable().aspectRatio(contentMode: .fill)
-                            } placeholder: { Color(.secondarySystemBackground) }
-                            .frame(width: 46, height: 62).clipShape(RoundedRectangle(cornerRadius: 6))
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(book.title).font(.subheadline).lineLimit(1)
-                                Text(ep.title.isEmpty ? "第 \(player.index + 1) 集" : ep.title)
-                                    .font(.caption).foregroundColor(.secondary).lineLimit(1)
-                            }
-                            Spacer()
-                            Button { player.toggle() } label: {
-                                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                    .font(.system(size: 30))
+            ScrollView {
+                if library.favorites.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "books.vertical")
+                            .font(.system(size: 42)).foregroundColor(.secondary)
+                        Text("书架还是空的").foregroundColor(.secondary)
+                        Text("搜到书后，在书籍页点右上角 ☆ 加进书架")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 90)
+                } else {
+                    LazyVGrid(columns: cols, spacing: 16) {
+                        ForEach(library.favorites) { b in
+                            NavigationLink(destination: BookDetailView(book: b)) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    AsyncImage(url: URL(string: b.cover)) { img in
+                                        img.resizable().aspectRatio(contentMode: .fill)
+                                    } placeholder: {
+                                        ZStack {
+                                            Color(.secondarySystemBackground)
+                                            Image(systemName: "photo").foregroundColor(.secondary)
+                                        }
+                                    }
+                                    .frame(height: 96)
+                                    .frame(maxWidth: .infinity)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                                    Text(b.title)
+                                        .font(.caption2)
+                                        .lineLimit(2)
+                                        .foregroundColor(.primary)
+                                }
                             }
                             .buttonStyle(.plain)
                         }
                     }
-                }
-
-                Section("继续收听") {
-                    ForEach(library.history.prefix(5)) { h in
-                        Button { resume(h) } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(h.book.title).font(.subheadline).lineLimit(1)
-                                Text("听到：" + (h.episodeTitle.isEmpty ? "第 \(h.episodeIndex + 1) 集" : h.episodeTitle))
-                                    .font(.caption).foregroundColor(.secondary).lineLimit(1)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    if library.history.isEmpty {
-                        Text("还没有收听记录").font(.caption).foregroundColor(.secondary)
-                    }
-                }
-
-                Section("收藏") {
-                    ForEach(library.favorites) { b in
-                        NavigationLink(destination: BookDetailView(book: b)) { BookRow(book: b) }
-                    }
-                    if library.favorites.isEmpty {
-                        Text("还没有收藏").font(.caption).foregroundColor(.secondary)
-                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 8)
+                    .padding(.bottom, 12)
                 }
             }
             .navigationTitle("我的书架")
-        }
-        .navigationViewStyle(.stack)
-    }
-
-    private func resume(_ h: LibraryStore.HistoryEntry) {
-        Task {
-            guard let src = SourceRegistry.source(withId: h.book.sourceId) else { return }
-            if let d = try? await src.detail(for: h.book) {
-                PlayerEngine.shared.play(book: h.book, episodes: d.episodes, startAt: h.episodeIndex)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("清空书架") { library.clearFavorites() }
+                        .disabled(library.favorites.isEmpty)
+                }
             }
         }
+        .navigationViewStyle(.stack)
     }
 }
 
