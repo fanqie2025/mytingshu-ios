@@ -233,12 +233,31 @@ enum RuleExtractor {
     /// 在节点集合里按规则取值；rule 形如 `h2 a.f-bold@text`、`img@src`、`@href`、`@text`、`@html`
     static func value(_ rule: String, in nodes: [HTMLNode], htmlCache: String? = nil) -> String {
         let parts = rule.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
-        let selector = parts.count > 0 ? String(parts[0]).trimmingCharacters(in: .whitespaces) : ""
+        var selector = parts.count > 0 ? String(parts[0]).trimmingCharacters(in: .whitespaces) : ""
         let accessor = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespaces) : "text"
 
-        var pool = nodes
+        var roots = nodes
+        // `^li img@src`：先往上找到最近的 li 再找图（封面常和条目容器不在同一层）
+        if selector.hasPrefix("^") {
+            let rest = selector.dropFirst()
+            let tagEnd = rest.firstIndex(where: { $0 == " " }) ?? rest.endIndex
+            let upTag = String(rest[rest.startIndex..<tagEnd]).lowercased()
+            let remain = tagEnd < rest.endIndex ? String(rest[rest.index(after: tagEnd)...]) : ""
+            var climbed: [HTMLNode] = []
+            for n in nodes {
+                var cur: HTMLNode? = n
+                while let c = cur, c.tag != upTag { cur = c.parent }
+                if let c = cur { climbed.append(c) }
+            }
+            if !climbed.isEmpty {
+                roots = climbed
+                selector = remain
+            }
+        }
+
+        var pool = roots
         if !selector.isEmpty {
-            pool = HTMLNode.select(selector, in: nodes)
+            pool = HTMLNode.select(selector, in: roots)
         }
         guard let node = pool.first else { return "" }
 

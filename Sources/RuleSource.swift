@@ -38,6 +38,11 @@ struct SourceRule: Codable, Identifiable {
         var author: String?
         var intro: String?
         var encoding: String?
+        // v2：POST 搜索 / 每步 UA
+        var method: String?                // "get"（默认）| "post"
+        var body: String?                  // POST 表单体（支持 {kw} {page}）
+        var ua: String?                    // 本步骤 UA："mobile" | "desktop"
+        var headers: [String: String]?
     }
 
     struct DetailRule: Codable {
@@ -49,18 +54,46 @@ struct SourceRule: Codable, Identifiable {
         var artist: String?
         var author: String?
         var encoding: String?
+        // v2：两步取目录（详情页 → 目录页）
+        var ua: String?                    // 详情页 UA
+        var dirUrl: String?                // 目录入口取值规则（如 "a.dirurl@href"）
+        var dirUA: String?                 // 目录页 UA（PTCMS 要桌面 UA）
+        var pages: PageRule?               // 目录分页
+
+        struct PageRule: Codable {
+            var url: String                // 支持 {dir} {page}
+            var max: Int?                  // 最多翻多少页（默认 60）
+        }
     }
 
     struct AudioRule: Codable {
-        var type: String                   // regex | direct | json | redirect | post
-        var pattern: String?               // regex 用
+        var type: String                   // regex | direct | json | redirect | post | pcPlayer
+        var pattern: String?               // regex / redirect 用
         var field: String?                 // json / post 用（点号路径）
+        var fieldAlt: String?              // field 取不到时再试这个（恋听网 ourl→url）
         var prefix: String?                // 相对地址前缀
-        var referer: String?               // 播放时的 Referer（不少 CDN 防盗链）
-        var headers: [String: String]?     // 播放时额外请求头
+        var referer: String?               // 播放时的 Referer（支持 {host} {episodeUrl}）
+        var headers: [String: String]?     // 请求头（值可含 {meta变量}）
         var url: String?                   // post 用：接口地址
-        var body: String?                  // post 用：表单体模板，可用 {变量}
+        var body: String?                  // post 用：表单体模板
         var metaFrom: [String: String]?    // post 用：变量名 -> 章节页 <meta name="...">
+        var metaDefaults: [String: String]?
+        // v2：重试 / 校验 / 签名 / 改写
+        var retries: Int?                  // 失败重试次数（每次重新拉章节页，默认 1）
+        var statusField: String?           // 返回体里的状态字段（如 "status"）
+        var statusOK: String?              // 状态等于它才算成功（如 "200"）
+        var ua: String?                    // 拉章节页用的 UA（PTCMS 这类要桌面 UA）
+        var sign: Sign?                    // 生成签名
+        var replace: [[String]]?           // 地址改写，如 [["https://mp3pd.","http://mp3pd."]]
+        var cookies: [String: String]?     // 请求前写的 cookie（值 "randHex16" 表示随机 16 位 hex）
+
+        struct Sign: Codable {
+            var kind: String               // ptcmsSp | md5 | base64Quote
+            var input: String?             // 输入模板（可用 {meta变量}）
+            var alphabet: String?          // ptcmsSp 用
+            var header: String?            // 放进请求头（否则放进 body 参数）
+            var param: String?             // 放进 body 的参数名
+        }
     }
 
     struct VerificationRule: Codable {
@@ -103,12 +136,34 @@ final class RuleSource: BookSource {
         return base + s
     }
 
-    private func fetch(_ url: String, gbk: Bool = false) async throws -> String {
+    private func fetch(_ url: String, gbk: Bool = false, desktop: Bool? = nil,
+                       form: String? = nil, extraHeaders: [String: String] = [:]) async throws -> String {
         await ensureWarmup()
         var headers = rule.headers ?? [:]
+        for (k, v) in extraHeaders { headers[k] = v }
         if headers["Referer"] == nil { headers["Referer"] = base }
-        let mobile = (rule.ua ?? "mobile").lowercased() != "desktop"
-        return try await HTTPClient.text(url, gbk: gbk, headers: headers, referer: base, mobile: mobile)
+        let useDesktop = desktop ?? ((rule.ua ?? "mobile").lowercased() == "desktop")
+
+        func once() async throws -> String {
+            if let form {
+                return try await HTTPClient.postForm(url, body: form, headers: headers,
+                                                     referer: base, mobile: !useDesktop)
+            }
+            return try await HTTPClient.text(url, gbk: gbk, headers: headers,
+                                             referer: base, mobile: !useDesktop)
+        }
+
+        var text = try await once()
+        // 任何页面都可能撞上「反转 + base64」型 JS Cookie 守卫 —— 规则源也自动解开重放
+        var left = 2
+        while left > 0, text.contains("var reversed") {
+            let cookies = HTTPClient.solveGuardCookies(text)
+            if cookies.isEmpty { break }
+            HTTPClient.applyGuardCookies(cookies, host: rule.host)
+            text = try await once()
+            left -= 1
+        }
+        return text
     }
 
     /// 有些站必须先访问首页拿到 session，否则详情/播放页返回的是首页（状态码仍是 200）
@@ -158,7 +213,13 @@ final class RuleSource: BookSource {
         guard let sr = rule.search else { return [] }
         let url = fill(sr.url, kw: keyword, page: page)
         let gbk = (sr.encoding ?? rule.encoding ?? "utf-8").lowercased().contains("gb")
-        let html = try await fetch(url, gbk: gbk)
+        let desktop = (sr.ua ?? rule.ua ?? "mobile").lowercased() == "desktop"
+        var form: String? = nil
+        if (sr.method ?? "get").lowercased() == "post" {
+            form = fill(sr.body ?? "searchword={kw}", kw: keyword, page: page)
+        }
+        let html = try await fetch(url, gbk: gbk, desktop: desktop, form: form,
+                                   extraHeaders: sr.headers ?? [:])
         if html.contains("系统安全验证") && needsVerification { throw SourceError.needVerification }
         return parseList(html, using: sr)
     }
@@ -197,20 +258,62 @@ final class RuleSource: BookSource {
     }
 
     func detail(for book: Book) async throws -> BookDetail {
-        let gbk = (rule.detail?.encoding ?? rule.encoding ?? "utf-8").lowercased().contains("gb")
-        let html = try await fetch(book.bookURL, gbk: gbk)
+        guard let d = rule.detail else { return BookDetail() }
+        let gbk = (d.encoding ?? rule.encoding ?? "utf-8").lowercased().contains("gb")
+        let desktop = (d.ua ?? rule.ua ?? "mobile").lowercased() == "desktop"
+        let html = try await fetch(book.bookURL, gbk: gbk, desktop: desktop)
         let doc = HTMLParser.parse(html)
         var out = BookDetail()
-        guard let d = rule.detail else { return out }
-        let nodes = HTMLNode.select(d.episodes, in: [doc])
+
         var episodes: [Episode] = []
-        for n in nodes {
-            let t = RuleExtractor.value(d.episodeTitle ?? "@text", in: [n])
-            var u = RuleExtractor.value(d.episodeUrl ?? "@href", in: [n])
-            if u.isEmpty { u = n.attr("href") ?? "" }
-            guard !u.isEmpty else { continue }
-            episodes.append(Episode(title: t, url: u.absoluteURL(base: base)))
+
+        if let dirRule = d.dirUrl, !dirRule.isEmpty {
+            // 两步：详情页 → 目录页（PTCMS 这类站点，目录页还要桌面 UA）
+            let path = RuleExtractor.value(dirRule, in: [doc])
+            guard !path.isEmpty else { throw SourceError.parse("详情页没找到目录入口") }
+            let dirURL = path.absoluteURL(base: base)
+            let dirDesktop = (d.dirUA ?? d.ua ?? rule.ua ?? "mobile").lowercased() == "desktop"
+            let maxPage = d.pages?.max ?? 60
+            var seen = Set<String>()
+            var pageNo = 1
+            while pageNo <= maxPage {
+                let u: String
+                if let tpl = d.pages?.url {
+                    u = fill(tpl, page: pageNo, extra: ["dir": dirURL])
+                } else if pageNo == 1 {
+                    u = dirURL
+                } else {
+                    u = dirURL + (dirURL.contains("?") ? "&" : "?") + "page=\(pageNo)"
+                }
+                let pageHTML = try await fetch(u, gbk: gbk, desktop: dirDesktop)
+                let pdoc = HTMLParser.parse(pageHTML)
+                let nodes = HTMLNode.select(d.episodes, in: [pdoc])
+                var added = 0
+                for n in nodes {
+                    let t = RuleExtractor.value(d.episodeTitle ?? "@text", in: [n])
+                    var uu = RuleExtractor.value(d.episodeUrl ?? "@href", in: [n])
+                    if uu.isEmpty { uu = n.attr("href") ?? "" }
+                    guard !uu.isEmpty, !seen.contains(uu) else { continue }
+                    seen.insert(uu)
+                    episodes.append(Episode(title: t, url: uu.absoluteURL(base: base)))
+                    added += 1
+                }
+                if added == 0 { break }
+                if d.pages == nil && nodes.count < 50 { break }
+                pageNo += 1
+            }
+        } else {
+            let nodes = HTMLNode.select(d.episodes, in: [doc])
+            for n in nodes {
+                let t = RuleExtractor.value(d.episodeTitle ?? "@text", in: [n])
+                var u = RuleExtractor.value(d.episodeUrl ?? "@href", in: [n])
+                if u.isEmpty { u = n.attr("href") ?? "" }
+                guard !u.isEmpty else { continue }
+                episodes.append(Episode(title: t, url: u.absoluteURL(base: base)))
+            }
         }
+
+        if episodes.isEmpty { throw SourceError.parse("没解析到章节") }
         out.episodes = episodes
         if let r = d.intro { out.intro = RuleExtractor.value(r, in: [doc]) }
         if let r = d.cover { out.cover = RuleExtractor.value(r, in: [doc]).absoluteURL(base: base) }
@@ -227,55 +330,158 @@ final class RuleSource: BookSource {
             guard let u = URL(string: episode.url) else { throw SourceError.badURL(episode.url) }
             return u
         }
-        let referer = a.referer ?? base
-        var raw = ""
-        switch a.type {
-        case "direct":
-            raw = episode.url
-        case "regex":
-            let html = try await fetch(episode.url)
-            raw = RuleExtractor.regex(a.pattern ?? "", in: html)
-            // JS 里常见 \/ 转义
-            raw = raw.replacingOccurrences(of: "\\/", with: "/")
-        case "json":
-            let body = try await fetch(episode.url)
-            if let data = body.data(using: .utf8),
-               let obj = try? JSONSerialization.jsonObject(with: data) {
-                raw = value(at: a.field ?? "", in: obj)
+        let referer = (a.referer ?? "{host}/")
+            .replacingOccurrences(of: "{host}", with: rule.host)
+            .replacingOccurrences(of: "{episodeUrl}", with: episode.url)
+
+        var lastError: Error = SourceError.parse("按规则没取到音频地址")
+        let tries = max(1, a.retries ?? 1)
+        for _ in 0..<tries {
+            do {
+                let raw = try await resolveAudio(a, episode: episode, referer: referer)
+                if !raw.isEmpty {
+                    var final = raw.absoluteURL(base: base)
+                    if let prefix = a.prefix { final = prefix + raw }
+                    // 地址改写（如 mp3pd 的 https 证书过期，必须换回 http）
+                    for pair in a.replace ?? [] where pair.count >= 2 {
+                        final = final.replacingOccurrences(of: pair[0], with: pair[1])
+                    }
+                    final = percentEncodedIfNeeded(final)
+                    guard let url = URL(string: final) else { throw SourceError.badURL(final) }
+                    return url
+                }
+                lastError = SourceError.parse("按规则没取到音频地址")
+            } catch {
+                // 状态校验没过 / 空地址 → 重试（每次都会重新拉章节页，拿到新的 token）
+                lastError = error
             }
+        }
+        throw lastError
+    }
+
+    /// 按类型取原始地址（不含改写/编码）
+    private func resolveAudio(_ a: SourceRule.AudioRule, episode: Episode, referer: String) async throws -> String {
+        let desktop = (a.ua ?? rule.ua ?? "mobile").lowercased() == "desktop"
+
+        func chapterPage() async throws -> String {
+            try await fetch(episode.url, desktop: desktop)
+        }
+
+        switch a.type.lowercased() {
+        case "direct":
+            return episode.url
+
+        case "regex":
+            let html = try await chapterPage()
+            return RuleExtractor.regex(a.pattern ?? "", in: html)
+                .replacingOccurrences(of: "\\/", with: "/")
+
+        case "json":
+            let body = try await chapterPage()
+            return jsonValue(body, field: a.field, alt: a.fieldAlt)
+
+        case "redirect":
+            let html = try await chapterPage()
+            let u = RuleExtractor.regex(a.pattern ?? "", in: html)
+            return await HTTPClient.resolveFinalURL(u.absoluteURL(base: base), referer: referer)
+
         case "post":
-            // 先抓章节页，从 <meta> 里取参数，再 POST 表单拿 JSON 里的地址
-            let page = try await fetch(episode.url)
+            // 1) 先拉章节页，从 <meta> 取变量（有些站限流时页面是空壳，所以整段可重试）
+            let page = try await chapterPage()
             var vars: [String: String] = [:]
             for (key, metaName) in a.metaFrom ?? [:] {
                 vars[key] = RuleExtractor.meta(metaName, in: page)
             }
-            var bodyText = a.body ?? ""
-            for (k, v) in vars { bodyText = bodyText.replacingOccurrences(of: "{\(k)}", with: v) }
-            let apiURL = fill(a.url ?? episode.url, extra: vars)
-            let resp = try await HTTPClient.postForm(apiURL, body: bodyText,
-                                                     headers: ["Referer": referer, "X-Requested-With": "XMLHttpRequest"],
-                                                     referer: referer)
-            if let data = resp.data(using: .utf8),
-               let obj = try? JSONSerialization.jsonObject(with: data) {
-                raw = value(at: a.field ?? "url", in: obj)
+            for (k, v) in a.metaDefaults ?? [:] where (vars[k] ?? "").isEmpty { vars[k] = v }
+
+            func fillVars(_ t: String) -> String {
+                var s = t
+                for (k, v) in vars { s = s.replacingOccurrences(of: "{\(k)}", with: v) }
+                return s
             }
-        case "redirect":
-            if let p = a.pattern {
-                let html = try await fetch(episode.url)
-                let u = RuleExtractor.regex(p, in: html)
-                raw = await HTTPClient.resolveFinalURL(u.absoluteURL(base: base), referer: referer)
+
+            var bodyText = fillVars(a.body ?? "")
+
+            // 2) 请求头（值里可写 {变量}）
+            var headers: [String: String] = [:]
+            for (k, v) in a.headers ?? [:] { headers[k] = fillVars(v) }
+            headers["Referer"] = referer
+            headers["X-Requested-With"] = headers["X-Requested-With"] ?? "XMLHttpRequest"
+
+            // 3) 签名（塞请求头或 body 参数）
+            if let sg = a.sign {
+                let input = fillVars(sg.input ?? "")
+                let sig = signValue(sg, input: input)
+                if let h = sg.header, !h.isEmpty {
+                    headers[h] = sig
+                } else {
+                    bodyText += (bodyText.isEmpty ? "" : "&") + "\(sg.param ?? "sp")=\(sig)"
+                }
             }
+
+            // 4) 先写需要的 cookie（有的站按 cookie 计数频控，给个随机的能避开）
+            for (name, val) in a.cookies ?? [:] {
+                let v = (val == "randHex16") ? randomHex(16) : fillVars(val)
+                HTTPClient.setCookie(name: name, value: v, host: rule.host)
+            }
+
+            let apiURL = fill(fillVars(a.url ?? episode.url), extra: vars)
+            let resp = try await HTTPClient.postForm(apiURL, body: bodyText, headers: headers,
+                                                     referer: referer, mobile: !desktop)
+
+            // 5) 状态字段校验：很多站限流时 HTTP 200 但 status 不是 200
+            if let sf = a.statusField, !sf.isEmpty {
+                let st = jsonValue(resp, field: sf, alt: nil)
+                if let want = a.statusOK, !want.isEmpty, st != want {
+                    throw SourceError.parse("接口状态 \(st.isEmpty ? "?" : st) ≠ \(want)（可能被限流）")
+                }
+            }
+            return jsonValue(resp, field: a.field, alt: a.fieldAlt)
+
         default:
-            raw = episode.url
+            return episode.url
         }
-        if raw.isEmpty { throw SourceError.parse("按规则没取到音频地址") }
-        var final = raw.absoluteURL(base: base)
-        if let prefix = a.prefix { final = prefix + raw }
-        // 有些接口返回的地址里带中文（未编码），有些已经是 %XX —— 只对前者编码
-        final = percentEncodedIfNeeded(final)
-        guard let url = URL(string: final) else { throw SourceError.badURL(final) }
-        return url
+    }
+
+    private func signValue(_ sg: SourceRule.AudioRule.Sign, input: String) -> String {
+        switch sg.kind {
+        case "ptcmsSp":
+            let alphabet = Array(sg.alphabet ?? "PXhw7U1B0a9kQDKZsTjIASmOeNzxYG4CHo1JyRfg2b8FLpEvr3FtVnlqMidu6c")
+            guard !alphabet.isEmpty else { return "" }
+            var out = ""
+            for ch in input {
+                if let idx = alphabet.firstIndex(of: ch) {
+                    out.append(alphabet[Int.random(in: 0..<alphabet.count)])
+                    out.append(alphabet[(idx + 3) % alphabet.count])
+                    out.append(alphabet[Int.random(in: 0..<alphabet.count)])
+                } else {
+                    for _ in 0..<3 { out.append(alphabet[Int.random(in: 0..<alphabet.count)]) }
+                }
+            }
+            return out
+        case "md5":
+            return md5Hex(input)
+        case "base64Quote":
+            let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+            let quoted = input.addingPercentEncoding(withAllowedCharacters: unreserved) ?? input
+            return Data(quoted.utf8).base64EncodedString()
+        default:
+            return input
+        }
+    }
+
+    private func randomHex(_ n: Int) -> String {
+        (0..<n).map { _ in String(format: "%x", Int.random(in: 0..<16)) }.joined()
+    }
+
+    /// 从 JSON 文本里按点号路径取值（先 field，取不到再 fieldAlt）
+    private func jsonValue(_ text: String, field: String?, alt: String?) -> String {
+        guard let data = text.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) else { return "" }
+        var v = ""
+        if let f = field, !f.isEmpty { v = value(at: f, in: obj) }
+        if v.isEmpty, let alt, !alt.isEmpty { v = value(at: alt, in: obj) }
+        return v
     }
 
     /// 播放时带的请求头（CDN 防盗链）

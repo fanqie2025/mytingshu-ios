@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 // MARK: - 网络
 
@@ -286,6 +287,12 @@ func withTimeout<T>(seconds: Double, operation: @escaping () async throws -> T) 
         }
         return first
     }
+}
+
+/// MD5（书源规则里的 md5 签名用；iOS 15+ 用 CryptoKit）
+func md5Hex(_ s: String) -> String {
+    let digest = Insecure.MD5.hash(data: Data(s.utf8))
+    return digest.map { String(format: "%02x", $0) }.joined()
 }
 
 /// 任意 JSON 值 → String（数字/布尔也能转）
