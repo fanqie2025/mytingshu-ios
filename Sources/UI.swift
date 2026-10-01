@@ -16,7 +16,7 @@ struct MiniPlayerBar: View {
         if let book = player.book, let ep = player.currentEpisode {
             HStack(spacing: 0) {
                 HStack(spacing: 8) {
-                    CoverImage(url: book.cover, side: 40, radius: 20)
+                    CoverImage(url: book.cover, side: 40, radius: Theme.Radius.coverMini)
 
                     Text(ep.title.isEmpty ? book.title : ep.title)
                         .font(Theme.metaSmall)
@@ -41,7 +41,7 @@ struct MiniPlayerBar: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, Theme.Space.page)
-            .padding(.bottom, 4)
+            .padding(.bottom, Theme.Space.row)
             .fullScreenCover(isPresented: $showFull) { PlayerScreen() }
         }
     }

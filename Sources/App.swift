@@ -38,20 +38,26 @@ struct MyTingShuApp: App {
 }
 
 struct RootView: View {
+    /// 页签选择：发现页空态要能一键切到「我的」导入书源
+    @State private var tab = 0
+
     var body: some View {
         // 三页签对齐唔语：书架 / 发现 / 我的（原「搜索 / 书源 / 历史 / 设置」不再占页签，
         // 搜索降为书架页顶部胶囊入口，历史与设置在「我的」里）
         // 迷你播放条挂在每个页签内容的底部（而不是挂在 TabView 上），这样它不会盖住底部 dock 栏。
-        TabView {
+        TabView(selection: $tab) {
             ShelfView()
                 .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
                 .tabItem { Label("书架", systemImage: "books.vertical.fill") }
-            DiscoverView()
+                .tag(0)
+            DiscoverView(onGoToMine: { tab = 2 })
                 .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
                 .tabItem { Label("发现", systemImage: "flame.fill") }
+                .tag(1)
             MineView()
                 .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
                 .tabItem { Label("我的", systemImage: "person.fill") }
+                .tag(2)
         }
         .tint(Theme.accent)
         .background(Theme.bg)

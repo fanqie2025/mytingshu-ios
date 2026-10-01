@@ -5,6 +5,11 @@ import SwiftUI
 // 唔语这页（它叫「热榜」）的「热榜 / 最近更新」是它服务端下发的内容；我们**没有服务端**，
 // 所以改为**源驱动**：源分段条 → 分类宫格 → 每个分类一个横向 Carousel（最多 4 个）。
 // 并发上限 2、单请求 20 秒超时、结果内存缓存 5 分钟（设计 §6.2 + 评审聚焦 5）
+//
+// 并发安全（独立评审修复）：`reload()` 有**代际号**，所有 `await` 之后一律
+// ① 先校验代际 ② 再按 id 重新定位数组下标；循环切片只对**快照**取下标。
+// 原因：源分段条/下拉刷新/重试都能在挂起期间触发第二次 reload，而 `sections` 会被整体重建，
+// 用旧的 `count`/`index` 取下标会 `Range requires lowerBound <= upperBound` 或 `Index out of range`。
 
 // MARK: 数据
 
@@ -42,6 +47,9 @@ private enum DiscoverRoute: Hashable {
 // MARK: 页面
 
 struct DiscoverView: View {
+    /// 空态里的「去导入书源」要切到「我的」页签 —— 由 RootView 注入（给了默认值，`DiscoverView()` 仍可用）
+    var onGoToMine: () -> Void = {}
+
     @ObservedObject private var settings = SourceSettings.shared
 
     @State private var path = NavigationPath()
@@ -50,6 +58,8 @@ struct DiscoverView: View {
     @State private var sections: [DiscoverSection] = []
     @State private var loadingMenus = false
     @State private var menusError: String?
+    /// 取数代际：重叠的 reload/load 用它丢弃跨代结果
+    @State private var generation = 0
 
     private let categoryColumns = Array(
         repeating: GridItem(.flexible(), spacing: Theme.Space.row),
@@ -72,8 +82,8 @@ struct DiscoverView: View {
                             kind: .empty,
                             title: "还没有启用任何源",
                             message: "去「我的 → 源管理」导入或启用书源",
-                            actionTitle: nil,
-                            action: nil
+                            actionTitle: "去导入书源",
+                            action: { onGoToMine() }
                         )
                         .padding(.top, 80)
                     } else {
@@ -151,7 +161,7 @@ struct DiscoverView: View {
     // MARK: 分类宫格
 
     private var categoryGrid: some View {
-        let categories = Array(menus.flatMap(\.categories).prefix(12))
+        let categories = dedupedCategories(limit: 12)
         return Group {
             if !categories.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
@@ -176,7 +186,7 @@ struct DiscoverView: View {
                                     .padding(.horizontal, 12)
                                     .frame(height: 38)
                                     .background(
-                                        RoundedRectangle(cornerRadius: Theme.Space.row, style: .continuous)
+                                        RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
                                             .fill(Theme.surface)
                                     )
                                 }
@@ -210,6 +220,9 @@ struct DiscoverView: View {
                 }
             }
             .padding(.horizontal, Theme.Space.page)
+        } else if section.books.isEmpty {
+            // 还没回来的分类给骨架，而不是一条空栏（评审聚焦 5）
+            skeletonCarousel(title: section.category.title)
         } else {
             CarouselSection(title: section.category.title, books: section.books) {
                 guard let src = currentSource else { return }
@@ -224,9 +237,43 @@ struct DiscoverView: View {
         }
     }
 
+    /// 取数中的骨架：四个灰块
+    private func skeletonCarousel(title: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(Theme.sectionTitle)
+                .foregroundColor(Theme.text2)
+                .padding(.horizontal, Theme.Space.page)
+
+            HStack(spacing: Theme.Space.gridGap) {
+                ForEach(0..<4, id: \.self) { _ in
+                    RoundedRectangle(cornerRadius: Theme.Radius.coverGrid, style: .continuous)
+                        .fill(Theme.surface)
+                        .frame(width: 92, height: 92)
+                }
+            }
+            .padding(.horizontal, Theme.Space.page)
+        }
+    }
+
     // MARK: 取数
 
+    /// 展平分类并按 URL 去重（`SourceCategory.id` 就是 url；重复 id 会让 ForEach 行为未定义）
+    private func dedupedCategories(limit: Int) -> [SourceCategory] {
+        var seen = Set<String>()
+        var result: [SourceCategory] = []
+        for category in menus.flatMap(\.categories) where !seen.contains(category.url) {
+            seen.insert(category.url)
+            result.append(category)
+            if result.count >= limit { break }
+        }
+        return result
+    }
+
     private func reload() async {
+        generation += 1
+        let gen = generation
+
         guard let src = currentSource else {
             menus = []; sections = []; menusError = nil
             return
@@ -234,28 +281,31 @@ struct DiscoverView: View {
         menusError = nil
         loadingMenus = true
         do {
-            menus = try await withTimeout(seconds: 20) { try await src.menus() }
+            let fetched = try await withTimeout(seconds: 20) { try await src.menus() }
+            guard gen == generation else { return }   // 期间又 reload 过 → 丢弃这一代
+            menus = fetched
         } catch {
+            guard gen == generation else { return }
             menus = []
             menusError = (error as? LocalizedError)?.errorDescription ?? "\(error)"
         }
         loadingMenus = false
 
-        let categories = Array(menus.flatMap(\.categories).prefix(4))
-        sections = categories.map { DiscoverSection(category: $0) }
+        // 快照：循环里只对快照取下标，绝不在 await 之后读 @State 数组
+        let snapshot = dedupedCategories(limit: 4).map { DiscoverSection(category: $0) }
+        sections = snapshot
 
         // 并发上限 2：每批两个，批间串行（评审聚焦 5）
-        for start in stride(from: 0, to: sections.count, by: 2) {
-            let slice = Array(sections[start..<min(start + 2, sections.count)])
+        for start in stride(from: 0, to: snapshot.count, by: 2) {
+            guard gen == generation else { return }
+            let slice = Array(snapshot[start..<min(start + 2, snapshot.count)])
 
             await withTaskGroup(of: (String, Result<[Book], Error>).self) { group in
                 for item in slice {
                     let key = discoverCacheKey(src.id, item.category.url)
 
                     if let cached = DiscoverCache.books(key) {
-                        if let index = sections.firstIndex(where: { $0.id == item.id }) {
-                            sections[index].books = cached
-                        }
+                        apply(books: cached, sourceId: src.id, sectionId: item.id, generation: gen)
                         continue
                     }
 
@@ -272,31 +322,56 @@ struct DiscoverView: View {
                 }
 
                 for await (id, result) in group {
-                    guard let index = sections.firstIndex(where: { $0.id == id }) else { continue }
                     switch result {
                     case .success(let books):
-                        sections[index].books = books
-                        DiscoverCache.put(discoverCacheKey(src.id, sections[index].category.url), books)
+                        apply(books: books, sourceId: src.id, sectionId: id, generation: gen)
                     case .failure(let error):
-                        sections[index].error = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                        apply(
+                            error: (error as? LocalizedError)?.errorDescription ?? "\(error)",
+                            sectionId: id,
+                            generation: gen
+                        )
                     }
                 }
             }
         }
     }
 
+    /// 单栏重试：先把分类抓到局部再 await，回来后按 id 重新定位
     private func load(sectionId: String) async {
+        let gen = generation
         guard let src = currentSource,
-              let index = sections.firstIndex(where: { $0.id == sectionId }) else { return }
-        sections[index].error = nil
+              let item = sections.first(where: { $0.id == sectionId }) else { return }
+
+        let category = item.category
+        if let index = sections.firstIndex(where: { $0.id == sectionId }) {
+            sections[index].error = nil
+        }
+
         do {
             let books = try await withTimeout(seconds: 20) {
-                try await src.books(in: sections[index].category, page: 1)
+                try await src.books(in: category, page: 1)
             }
-            sections[index].books = books
-            DiscoverCache.put(discoverCacheKey(src.id, sections[index].category.url), books)
+            apply(books: books, sourceId: src.id, sectionId: sectionId, generation: gen)
         } catch {
-            sections[index].error = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+            apply(
+                error: (error as? LocalizedError)?.errorDescription ?? "\(error)",
+                sectionId: sectionId,
+                generation: gen
+            )
         }
+    }
+
+    // MARK: 落地（一律先校验代际，再按 id 重新定位）
+
+    private func apply(books: [Book], sourceId: String, sectionId: String, generation gen: Int) {
+        guard gen == generation, let index = sections.firstIndex(where: { $0.id == sectionId }) else { return }
+        sections[index].books = books
+        DiscoverCache.put(discoverCacheKey(sourceId, sections[index].category.url), books)
+    }
+
+    private func apply(error message: String, sectionId: String, generation gen: Int) {
+        guard gen == generation, let index = sections.firstIndex(where: { $0.id == sectionId }) else { return }
+        sections[index].error = message
     }
 }

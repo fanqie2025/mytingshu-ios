@@ -277,7 +277,7 @@ struct ConfirmDialog: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.35)
+            Theme.scrim.opacity(0.35)
                 .ignoresSafeArea()
                 .onTapGesture { isPresented = false }
 
@@ -306,7 +306,7 @@ struct ConfirmDialog: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
                         .background(
-                            RoundedRectangle(cornerRadius: Theme.Space.row, style: .continuous)
+                            RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
                                 .fill(Theme.accent)
                         )
                 }

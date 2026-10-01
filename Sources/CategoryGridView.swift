@@ -69,6 +69,8 @@ struct CategoryGridView: View {
             }
         }
         .background(Theme.bg)
+        // 本页由 `.toolbar(.hidden)` 的发现页 push 进来，显式恢复导航栏才拿得到返回按钮
+        .toolbar(.visible, for: .navigationBar)
         .navigationTitle(category.title)
         .navigationBarTitleDisplayMode(.inline)
         .task {

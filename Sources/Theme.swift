@@ -30,6 +30,8 @@ enum Theme {
     /// 白色确认弹窗的底色 / 文字色 —— 唔语在纯黑 App 里的唯一浅色例外（截图 08）
     static let dialogBG = Color(hex: 0xFFFFFF)
     static let dialogText = Color(hex: 0x000000)
+    /// 弹窗背后的遮罩
+    static let scrim = Color(hex: 0x000000)
 
     // MARK: - 字体（系统字体，不引任何字体文件；设计 §4.3）
 
@@ -69,6 +71,10 @@ enum Theme {
         static let card: CGFloat = 12
         /// 播放页大封面
         static let coverHero: CGFloat = 16
+        /// 迷你条上的圆形封面（= 直径 ÷ 2）
+        static let coverMini: CGFloat = 20
+        /// 小胶囊 / 小按钮：分类 chip、弹窗确认按钮
+        static let chip: CGFloat = 8
     }
 
     // MARK: - 间距（设计 §4.4）
