@@ -305,9 +305,93 @@ func anyString(_ v: Any?) -> String {
     }
 }
 
-/// 清洗接口返回的富文本（去标签 + 还原实体）
+/// 清洗接口返回的富文本（去标签 + 还原实体 + 再解一层 \uXXXX）
+/// 酷我 ft=music 的 ARTIST 是双重转义后的 `三体宇宙\u0026喜马拉雅`，单靠 htmlDecoded 解不掉
 func cleanText(_ v: Any?) -> String {
-    anyString(v).htmlDecoded.strippedTags
+    var s = anyString(v).htmlDecoded.strippedTags
+    s = s.replacingOccurrences(of: "\\u0026", with: "&")
+    s = s.replacingOccurrences(of: "\\u002F", with: "/")
+    s = s.replacingOccurrences(of: "\\/", with: "/")
+    // 其余 \uXXXX 统一解码（顺手清掉多余的转义反斜杠）
+    if s.contains("\\u") {
+        var out = ""
+        var chars = Array(s)
+        var i = 0
+        while i < chars.count {
+            if chars[i] == "\\", i + 5 < chars.count, chars[i + 1] == "u",
+               let code = UInt32(String(chars[(i + 2)...(i + 5)]), radix: 16),
+               let scalar = Unicode.Scalar(code) {
+                out.append(Character(scalar))
+                i += 6
+            } else {
+                out.append(chars[i])
+                i += 1
+            }
+        }
+        s = out
+    }
+    s = s.replacingOccurrences(of: "\\&", with: "&")
+    return s.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+/// 把「单引号 JS/Python 对象字面量」归一化成 JSON（酷我接口 `rformat=json` 名不副实）
+func normalizeLiteral(_ text: String) -> String {
+    var out = ""
+    let chars = Array(text)
+    var i = 0
+    let n = chars.count
+    func isIdent(_ c: Character) -> Bool { c.isLetter || c.isNumber || c == "_" || c == "$" }
+    while i < n {
+        let ch = chars[i]
+        if ch == "'" || ch == "\"" {
+            let quote = ch
+            i += 1
+            var buf = ""
+            while i < n {
+                let c = chars[i]
+                if c == "\\", i + 1 < n {
+                    buf.append(c); buf.append(chars[i + 1]); i += 2; continue
+                }
+                if c == quote { i += 1; break }
+                buf.append(c); i += 1
+            }
+            // 单引号串里的双引号要转义
+            buf = buf.replacingOccurrences(of: "\\\"", with: "\"")
+                     .replacingOccurrences(of: "\"", with: "\\\"")
+            out += "\"" + buf + "\""
+            continue
+        }
+        if ch.isLetter || ch == "_" {
+            var j = i
+            while j < n, isIdent(chars[j]) { j += 1 }
+            let word = String(chars[i..<j])
+            var k = j
+            while k < n, chars[k] == " " || chars[k] == "\t" || chars[k] == "\r" || chars[k] == "\n" { k += 1 }
+            if k < n, chars[k] == ":" {
+                out += "\"" + word + "\""
+            } else {
+                out += word
+            }
+            i = j
+            continue
+        }
+        out += String(ch)
+        i += 1
+    }
+    // 尾逗号
+    if let re = try? NSRegularExpression(pattern: ",(\\s*[\\]}])") {
+        let range = NSRange(out.startIndex..<out.endIndex, in: out)
+        out = re.stringByReplacingMatches(in: out, range: range, withTemplate: "$1")
+    }
+    return out
+}
+
+/// 字面量文本 → JSON 对象（先归一化；失败返回 nil）
+func parseLiteralObject(_ text: String) -> Any? {
+    if let d = text.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) { return o }
+    let norm = normalizeLiteral(text)
+    if let d = norm.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) { return o }
+    return nil
 }
 
 /// 非 ASCII 的 URL 才需要百分号编码。

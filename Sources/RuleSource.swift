@@ -56,10 +56,12 @@ struct SourceRule: Codable, Identifiable {
         var ua: String?                    // 本步骤 UA："mobile" | "desktop"
         var headers: [String: String]?
         // v2：JSON 接口模式（分类列表/搜索接口返回 JSON）
-        var kind: String?                  // "html"（默认）| "json"
+        var kind: String?                  // "html"（默认）| "json" | "literal"（单引号 JS 字面量）
         var items: String?                 // JSON：数组路径（留空 = 裸数组）
         var node: String?                  // JSON：每条再下沉一层（如 "novel"）
         var apiVars: [String: String]?     // 先 GET 分类页读出 `var <值> = '...'` 再调接口
+        var dedupe: Bool?                  // 按 bookURL 去重（歌曲接口 20 条可能只对应 12 张专辑）
+        var prefix: String?                // 封面等相对地址的前缀（在拼绝对地址**之前**加）
     }
 
     struct DetailRule: Codable {
@@ -76,6 +78,10 @@ struct SourceRule: Codable, Identifiable {
         var dirUrl: String?                // 目录入口取值规则（如 "a.dirurl@href"）
         var dirUA: String?                 // 目录页 UA（PTCMS 要桌面 UA）
         var pages: PageRule?               // 目录分页
+        // v2：详情本身是接口（JSON / 单引号字面量）时
+        var kind: String?                  // "html"（默认）| "json" | "literal"
+        var url: String?                   // 真正要 GET 的详情接口地址模板
+        var urlVars: [String: String]?     // 从 bookURL 用正则取变量（组 1）供 {变量} 用
 
         struct PageRule: Codable {
             var url: String                // 支持 {dir} {page}
@@ -144,14 +150,7 @@ final class RuleSource: BookSource {
     }
 
     private func fill(_ template: String, kw: String? = nil, page: Int? = nil, extra: [String: String] = [:]) -> String {
-        var s = template
-        s = s.replacingOccurrences(of: "{host}", with: rule.host)
-        if let kw {
-            let enc = kw.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? kw
-            s = s.replacingOccurrences(of: "{kw}", with: enc)
-        }
-        if let page { s = s.replacingOccurrences(of: "{page}", with: "\(page)") }
-        for (k, v) in extra { s = s.replacingOccurrences(of: "{\(k)}", with: v) }
+        var s = fillText(template, kw: kw, page: page, extra: extra)
         if s.hasPrefix("http") { return s }
         if s.hasPrefix("/") { return rule.host.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + s }
         return base + s
@@ -165,7 +164,11 @@ final class RuleSource: BookSource {
             let enc = kw.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? kw
             s = s.replacingOccurrences(of: "{kw}", with: enc)
         }
-        if let page { s = s.replacingOccurrences(of: "{page}", with: "\(page)") }
+        if let page {
+            s = s.replacingOccurrences(of: "{page}", with: "\(page)")
+            // 0 基页码：有些接口 pn 从 0 开始（酷我 pn=1 会丢掉最佳命中）
+            s = s.replacingOccurrences(of: "{page0}", with: "\(max(0, page - 1))")
+        }
         for (k, v) in extra { s = s.replacingOccurrences(of: "{\(k)}", with: v) }
         return s
     }
@@ -216,8 +219,18 @@ final class RuleSource: BookSource {
     }
 
     private func parseList(_ html: String, using lr: SourceRule.ListRule) -> [Book] {
-        if (lr.kind ?? "html").lowercased() == "json" {
-            return parseJSONList(html, using: lr)
+        switch (lr.kind ?? "html").lowercased() {
+        case "json":
+            if let d = html.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) {
+                return parseObjectList(o, using: lr)
+            }
+            return []
+        case "literal":
+            // 单引号 JS/Python 字面量（酷我 `rformat=json` 名不副实）
+            if let o = parseLiteralObject(html) { return parseObjectList(o, using: lr) }
+            return []
+        default:
+            break
         }
         let doc = HTMLParser.parse(html)
         let nodes = HTMLNode.select(lr.list, in: [doc])
@@ -317,11 +330,9 @@ final class RuleSource: BookSource {
         return parseList(text, using: lr)
     }
 
-    /// JSON 接口模式的列表解析：字段写点号路径；一条规则同时兼容
+    /// JSON / 字面量接口模式的列表解析：字段写点号路径；一条规则同时兼容
     /// 「{data:[{title,url,pic,boyin,content}]}」与「[{novel:{name,url,cover,intro}}]」两种形态
-    private func parseJSONList(_ text: String, using lr: SourceRule.ListRule) -> [Book] {
-        guard let data = text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) else { return [] }
+    private func parseObjectList(_ obj: Any, using lr: SourceRule.ListRule) -> [Book] {
         var arr: [Any] = []
         if let path = lr.items, !path.isEmpty {
             arr = (anyValue(at: path, in: obj) as? [Any]) ?? []
@@ -343,20 +354,26 @@ final class RuleSource: BookSource {
         }
 
         var books: [Book] = []
+        var seen = Set<String>()
         for item in arr {
             var node: Any = item
             if let n = lr.node, !n.isEmpty, let sub = anyValue(at: n, in: item) { node = sub }
             let title = cleanText(pick([lr.title, "title", "name"], node))
             let url = pick([lr.urlRule, "url", "bookurl"], node)
             guard !title.isEmpty, !url.isEmpty else { continue }
-            let cover = pick([lr.cover, "cover", "pic", "img", "image"], node)
-            let artist = pick([lr.artist, "boyin", "artist", "narrator"], node)
-            let author = pick([lr.author, "author"], node)
-            let intro = pick([lr.intro, "content", "intro", "description"], node)
-            books.append(Book(sourceId: id, title: title, author: author, artist: artist,
+            var cover = pick([lr.cover, "cover", "pic", "img", "image"], node)
+            if !cover.isEmpty, let prefix = lr.prefix { cover = prefix + cover }
+            let bookURL = url.absoluteURL(base: base)
+            if lr.dedupe == true {
+                if seen.contains(bookURL) { continue }
+                seen.insert(bookURL)
+            }
+            books.append(Book(sourceId: id, title: title,
+                              author: cleanText(pick([lr.author, "author"], node)),
+                              artist: cleanText(pick([lr.artist, "boyin", "artist", "narrator"], node)),
                               cover: cover.absoluteURL(base: base),
-                              bookURL: url.absoluteURL(base: base),
-                              intro: intro))
+                              bookURL: bookURL,
+                              intro: cleanText(pick([lr.intro, "content", "intro", "description"], node))))
         }
         return books
     }
@@ -383,9 +400,49 @@ final class RuleSource: BookSource {
         guard let d = rule.detail else { return BookDetail() }
         let gbk = (d.encoding ?? rule.encoding ?? "utf-8").lowercased().contains("gb")
         let desktop = (d.ua ?? rule.ua ?? "mobile").lowercased() == "desktop"
-        let html = try await fetch(book.bookURL, gbk: gbk, desktop: desktop)
-        let doc = HTMLParser.parse(html)
+
+        // 详情接口地址：可由 bookURL 正则取变量后拼出来（酷我 bookURL 只携带 albumid）
+        var detailURL = book.bookURL
+        if let tpl = d.url, !tpl.isEmpty {
+            var vars: [String: String] = [:]
+            for (k, pat) in d.urlVars ?? [:] { vars[k] = book.bookURL.firstMatch(pat) ?? "" }
+            detailURL = fillText(tpl, extra: vars)
+            if !detailURL.hasPrefix("http") { detailURL = fill(tpl, extra: vars) }
+        }
+
+        let html = try await fetch(detailURL, gbk: gbk, desktop: desktop)
         var out = BookDetail()
+
+        // 详情本身是接口（JSON / 字面量）：章节走点号路径
+        let kind = (d.kind ?? "html").lowercased()
+        if kind == "json" || kind == "literal" {
+            let obj: Any?
+            if kind == "json" {
+                obj = html.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+            } else {
+                obj = parseLiteralObject(html)
+            }
+            guard let root = obj else { throw SourceError.parse("详情响应不是 \(kind) 结构") }
+            let arr = (anyValue(at: d.episodes, in: root) as? [Any]) ?? []
+            var episodes: [Episode] = []
+            for it in arr {
+                let t = cleanText(anyValue(at: d.episodeTitle ?? "name", in: it) ?? "")
+                let u = anyString(anyValue(at: d.episodeUrl ?? "url", in: it) ?? "")
+                guard !u.isEmpty else { continue }
+                episodes.append(Episode(title: t, url: u))   // 接口模式的章节地址原样保留（可能是 rid）
+            }
+            if episodes.isEmpty { throw SourceError.parse("没解析到章节") }
+            out.episodes = episodes
+            if let r = d.artist { out.artist = cleanText(anyValue(at: r, in: root) ?? "") }
+            if let r = d.author { out.author = cleanText(anyValue(at: r, in: root) ?? "") }
+            if let r = d.intro { out.intro = cleanText(anyValue(at: r, in: root) ?? "") }
+            if let r = d.cover { out.cover = anyString(anyValue(at: r, in: root) ?? "").absoluteURL(base: base) }
+            if out.cover.isEmpty { out.cover = book.cover }
+            if out.intro.isEmpty { out.intro = book.intro }
+            return out
+        }
+
+        let doc = HTMLParser.parse(html)
 
         var episodes: [Episode] = []
 
@@ -509,6 +566,23 @@ final class RuleSource: BookSource {
             let html = try await chapterPage()
             let u = RuleExtractor.regex(a.pattern ?? "", in: html)
             return await HTTPClient.resolveFinalURL(u.absoluteURL(base: base), referer: referer)
+
+        case "api":
+            // 通用版：从章节地址正则取变量 → 拼接口地址 → GET → 点号路径取值 → 退正则
+            var vars: [String: String] = [:]
+            for (k, pat) in a.urlVars ?? [:] { vars[k] = episode.url.firstMatch(pat) ?? "" }
+            var apiURL = fillText(a.url ?? episode.url, extra: vars)
+            if !apiURL.hasPrefix("http") { apiURL = fill(a.url ?? episode.url, extra: vars) }
+            let text = try await fetch(apiURL, desktop: desktop, extraHeaders: a.headers ?? [:])
+            var raw = jsonValue(text, field: a.field, alt: a.fieldAlt)
+            if raw.isEmpty, let root = parseLiteralObject(text) {
+                if let f = a.field, !f.isEmpty { raw = anyString(anyValue(at: f, in: root) ?? "") }
+                if raw.isEmpty, let alt = a.fieldAlt, !alt.isEmpty {
+                    raw = anyString(anyValue(at: alt, in: root) ?? "")
+                }
+            }
+            if raw.isEmpty, let p = a.pattern { raw = RuleExtractor.regex(p, in: text) }
+            return raw
 
         case "pcplayer":
             // 先按正则从章节链接里取值，拼出 PC 播放页，再求值页面里的 `mp3:` 拼接表达式
