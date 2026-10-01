@@ -15,6 +15,15 @@ enum SourceRegistry {
 final class SourceStore: ObservableObject {
     static let shared = SourceStore()
 
+    /// 内置的**官方订阅地址**（我自己的书源仓库）。
+    /// 界面上**不预填、不展示** —— 在「导入书源 → 订阅地址」里输入 `builtinSubscriptionKeyword` 即自动替换成它。
+    static let officialSubscriptionURL =
+        "https://cdn.jsdelivr.net/gh/fanqie2025/mytingshu-sources@main/subscription/sources.json"
+
+    /// 隐藏快捷词：输入它就等于填上 `officialSubscriptionURL`（避免手打长链接）。
+    /// 刻意不在界面与公开 README 里提示，只记在开发台账里。
+    static let builtinSubscriptionKeyword = "666"
+
     /// 用户导入的 JSON 规则
     @Published private(set) var imported: [SourceRule] = []
 

@@ -272,6 +272,13 @@ struct SettingsView: View {
                     TextField("https://…/sources.json", text: $importURL)
                         .textInputAutocapitalization(.never)
                         .disableAutocorrection(true)
+                        .onChange(of: importURL) { newValue in
+                            // 隐藏快捷入口：地址框里输入 666 → 自动换成内置的官方订阅地址
+                            if newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                                == SourceStore.builtinSubscriptionKeyword {
+                                importURL = SourceStore.officialSubscriptionURL
+                            }
+                        }
                     Button {
                         Task { await doImportURL() }
                     } label: { busy ? AnyView(ProgressView()) : AnyView(Text("从地址导入")) }
@@ -342,7 +349,12 @@ struct SettingsView: View {
     private func doImportURL() async {
         busy = true
         do {
-            let names = try await store.importURL(importURL)
+            // 隐藏快捷入口兜底：万一 666 没被 onChange 替换掉（例如从剪贴板整段粘贴后直接点导入），这里再解析一次
+            let typed = importURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            let target = (typed == SourceStore.builtinSubscriptionKeyword)
+                ? SourceStore.officialSubscriptionURL
+                : typed
+            let names = try await store.importURL(target)
             settings.enableNewSources()
             importMsg = "✅ 导入成功：\(names.joined(separator: "、"))"
             importURL = ""
