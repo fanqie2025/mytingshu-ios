@@ -68,6 +68,8 @@ struct SourceRule: Codable, Identifiable {
         var episodes: String               // 章节容器/链接选择器
         var episodeTitle: String?          // 默认 "@title"
         var episodeUrl: String?            // 默认 "@href"
+        var episodeUrlTemplate: String?    // 章节地址模板（站点只给数字 id 时要自己拼）
+        var episodeUrlVars: [String: String]?  // 模板变量 <- 条目字段（点号路径）
         var intro: String?
         var cover: String?
         var artist: String?
@@ -403,11 +405,11 @@ final class RuleSource: BookSource {
 
         // 详情接口地址：可由 bookURL 正则取变量后拼出来（酷我 bookURL 只携带 albumid）
         var detailURL = book.bookURL
+        var detailVars: [String: String] = [:]
         if let tpl = d.url, !tpl.isEmpty {
-            var vars: [String: String] = [:]
-            for (k, pat) in d.urlVars ?? [:] { vars[k] = book.bookURL.firstMatch(pat) ?? "" }
-            detailURL = fillText(tpl, extra: vars)
-            if !detailURL.hasPrefix("http") { detailURL = fill(tpl, extra: vars) }
+            for (k, pat) in d.urlVars ?? [:] { detailVars[k] = book.bookURL.firstMatch(pat) ?? "" }
+            detailURL = fillText(tpl, extra: detailVars)
+            if !detailURL.hasPrefix("http") { detailURL = fill(tpl, extra: detailVars) }
         }
 
         let html = try await fetch(detailURL, gbk: gbk, desktop: desktop)
@@ -427,7 +429,18 @@ final class RuleSource: BookSource {
             var episodes: [Episode] = []
             for it in arr {
                 let t = cleanText(anyValue(at: d.episodeTitle ?? "name", in: it) ?? "")
-                let u = anyString(anyValue(at: d.episodeUrl ?? "url", in: it) ?? "")
+                var u = ""
+                if let tpl = d.episodeUrlTemplate, !tpl.isEmpty {
+                    // 章节地址要自己拼（站点只给数字 id，书 id 来自 detail.urlVars）
+                    var ev = detailVars
+                    for (v, path) in d.episodeUrlVars ?? [:] {
+                        ev[v] = anyString(anyValue(at: path, in: it) ?? "")
+                    }
+                    u = fillText(tpl, extra: ev)
+                    if !u.hasPrefix("http") { u = fill(tpl, extra: ev) }
+                } else {
+                    u = anyString(anyValue(at: d.episodeUrl ?? "url", in: it) ?? "")
+                }
                 guard !u.isEmpty else { continue }
                 episodes.append(Episode(title: t, url: u))   // 接口模式的章节地址原样保留（可能是 rid）
             }
@@ -569,7 +582,7 @@ final class RuleSource: BookSource {
 
         case "api":
             // 通用版：从章节地址正则取变量 → 拼接口地址 → GET → 点号路径取值 → 退正则
-            var vars: [String: String] = [:]
+            var vars: [String: String] = ["now": "\(Int(Date().timeIntervalSince1970))"]
             for (k, pat) in a.urlVars ?? [:] { vars[k] = episode.url.firstMatch(pat) ?? "" }
             var apiURL = fillText(a.url ?? episode.url, extra: vars)
             if !apiURL.hasPrefix("http") { apiURL = fill(a.url ?? episode.url, extra: vars) }
@@ -596,11 +609,14 @@ final class RuleSource: BookSource {
             return RuleExtractor.mediaExprURL(html) ?? ""
 
         case "post":
-            // 1) 先拉章节页，从 <meta> 取变量（有些站限流时页面是空壳，所以整段可重试）
-            let page = try await chapterPage()
-            var vars: [String: String] = [:]
-            for (key, metaName) in a.metaFrom ?? [:] {
-                vars[key] = RuleExtractor.meta(metaName, in: page)
+            // {now}：请求当刻的 epoch 秒（签名与 URL 必须用同一个值）
+            var vars: [String: String] = ["now": "\(Int(Date().timeIntervalSince1970))"]
+            // 从章节地址正则取变量（书音FM 的 id/movieId 都从地址里来）
+            for (k, pat) in a.urlVars ?? [:] { vars[k] = episode.url.firstMatch(pat) ?? "" }
+            // 只有写了 metaFrom 才需要先拉章节页，从 <meta> 取变量
+            if let metaFrom = a.metaFrom, !metaFrom.isEmpty {
+                let page = try await chapterPage()
+                for (key, metaName) in metaFrom { vars[key] = RuleExtractor.meta(metaName, in: page) }
             }
             for (k, v) in a.metaDefaults ?? [:] where (vars[k] ?? "").isEmpty { vars[k] = v }
 
