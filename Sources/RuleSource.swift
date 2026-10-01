@@ -42,7 +42,10 @@ struct SourceRule: Codable, Identifiable {
     struct ListRule: Codable {
         var url: String                    // 第 1 页；支持 {kw} {page} {host}
         var pageUrl: String?               // 第 2 页起（含 {page}），不填则用 url 替换 {page}
-        var list: String                   // 条目容器选择器
+        /// 条目容器选择器。**HTML 模式必填；JSON / literal 模式改用 `items`，这里就缺省**。
+        /// 曾经写成非可选 —— 结果酷我畅听/书音FM/29听书网 三个 JSON 模式的源会让**整份订阅导入失败**
+        /// （`keyNotFound("list")`，一个源坏掉整包都进不来）。
+        var list: String?
         var title: String                  // 取值规则，如 "h2 a@text"
         var urlRule: String?               // 条目链接取值，如 "h2 a@href"（默认同 title 的 @href）
         var cover: String?
@@ -222,7 +225,7 @@ final class RuleSource: BookSource {
                                        mobile: (rule.ua ?? "mobile").lowercased() != "desktop")
     }
 
-    private func parseList(_ html: String, using lr: SourceRule.ListRule) -> [Book] {
+    private func parseList(_ html: String, using lr: SourceRule.ListRule) throws -> [Book] {
         switch (lr.kind ?? "html").lowercased() {
         case "json":
             if let d = stripBOM(html).data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) {
@@ -236,8 +239,12 @@ final class RuleSource: BookSource {
         default:
             break
         }
+        guard let listSelector = lr.list, !listSelector.isEmpty else {
+            // HTML 模式没有 list 是**规则写错**，明确报错；静默返回空会让人以为是站点没结果
+            throw SourceError.parse("搜索规则缺少 list 选择器（JSON / literal 模式请改用 kind + items）")
+        }
         let doc = HTMLParser.parse(html)
-        let nodes = HTMLNode.select(lr.list, in: [doc])
+        let nodes = HTMLNode.select(listSelector, in: [doc])
         let useGBK = (lr.encoding ?? rule.encoding ?? "utf-8").lowercased().contains("gb")
         _ = useGBK
         var books: [Book] = []
@@ -279,7 +286,7 @@ final class RuleSource: BookSource {
         let html = try await fetch(url, gbk: gbk, desktop: desktop, form: form,
                                    extraHeaders: sr.headers ?? [:])
         if html.contains("系统安全验证") && needsVerification { throw SourceError.needVerification }
-        return parseList(html, using: sr)
+        return try parseList(html, using: sr)
     }
 
     func menus() async throws -> [CategoryMenu] {
@@ -335,7 +342,7 @@ final class RuleSource: BookSource {
             }
         }
         let text = try await fetch(url, gbk: gbk, desktop: desktop, extraHeaders: lr.headers ?? [:])
-        return parseList(text, using: lr)
+        return try parseList(text, using: lr)
     }
 
     /// JSON / 字面量接口模式的列表解析：字段写点号路径；一条规则同时兼容

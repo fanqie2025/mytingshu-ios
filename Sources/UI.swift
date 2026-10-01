@@ -170,12 +170,9 @@ struct HistoryView: View {
 struct SettingsView: View {
     @ObservedObject var settings = SourceSettings.shared
     @ObservedObject var store = SourceStore.shared
-    @ObservedObject var player = PlayerEngine.shared
     @ObservedObject var cache = CacheManager.shared
     @Environment(\.dismiss) private var dismiss
     @State private var showImport = false
-    @State private var showRate = false
-    @State private var showSleep = false
     @State private var showDiag = false
     @State private var showAbs = false
     @State private var importText = ""
@@ -234,34 +231,6 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("播放") {
-                    Picker("跳过片头", selection: Binding(
-                        get: { Int(player.skipIntro) },
-                        set: { player.skipIntro = Double($0) })) {
-                        Text("不跳过").tag(0); Text("5 秒").tag(5); Text("10 秒").tag(10)
-                        Text("15 秒").tag(15); Text("30 秒").tag(30); Text("45 秒").tag(45); Text("60 秒").tag(60)
-                    }
-                    Picker("跳过片尾", selection: Binding(
-                        get: { Int(player.skipOutro) },
-                        set: { player.skipOutro = Double($0) })) {
-                        Text("不跳过").tag(0); Text("5 秒").tag(5); Text("10 秒").tag(10)
-                        Text("15 秒").tag(15); Text("30 秒").tag(30); Text("45 秒").tag(45); Text("60 秒").tag(60)
-                    }
-                    HStack(spacing: 10) {
-                        Text("倍速").font(.subheadline)
-                        Slider(value: Binding(get: { Double(player.rate) },
-                                              set: { player.setRate(Float(($0 * 100).rounded() / 100)) }),
-                               in: 0.5...3.0, step: 0.05)
-                        Text(rateLabel(player.rate)).font(.caption).monospacedDigit().frame(width: 50)
-                    }
-                    HStack {
-                        Text("定时关闭")
-                        Spacer()
-                        Button(player.sleepDeadline == nil ? "关闭" : sleepTitle) { showSleep = true }
-                            .foregroundColor(.orange)
-                    }
-                }
-
                 Section("缓存") {
                     Picker("自动缓存下集", selection: Binding(
                         get: { CacheManager.shared.autoCacheNext },
@@ -291,15 +260,9 @@ struct SettingsView: View {
             .navigationTitle("设置")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             .sheet(isPresented: $showImport) { importSheet }
-            .sheet(isPresented: $showSleep) { SleepSheet() }
             .sheet(isPresented: $showDiag) { DiagnosticsView() }
             .sheet(isPresented: $showAbs) { AbsConfigSheet() }
         }
-    }
-
-    private var sleepTitle: String {
-        guard let d = player.sleepDeadline else { return "关闭" }
-        return "\(max(0, Int(d.timeIntervalSinceNow / 60))) 分钟后"
     }
 
     private var importSheet: some View {
@@ -387,12 +350,6 @@ struct SettingsView: View {
             importMsg = "❌ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
         }
         busy = false
-    }
-
-    private var sleepTag: Int {
-        guard let d = player.sleepDeadline else { return 0 }
-        let mins = Int(round(d.timeIntervalSinceNow / 60))
-        return [15, 30, 60].min(by: { abs($0 - mins) < abs($1 - mins) }) ?? 30
     }
 }
 
