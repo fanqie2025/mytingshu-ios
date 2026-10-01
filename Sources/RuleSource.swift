@@ -62,6 +62,8 @@ struct SourceRule: Codable, Identifiable {
         var apiVars: [String: String]?     // 先 GET 分类页读出 `var <值> = '...'` 再调接口
         var dedupe: Bool?                  // 按 bookURL 去重（歌曲接口 20 条可能只对应 12 张专辑）
         var prefix: String?                // 封面等相对地址的前缀（在拼绝对地址**之前**加）
+        var categoryUrl: String?           // 分类浏览改打这个模板（不填沿用 search.url）
+        var searchDelayMs: Int?            // 搜索前先等这么久（有的站限流：22听书 6 秒一次）
     }
 
     struct DetailRule: Codable {
@@ -263,6 +265,10 @@ final class RuleSource: BookSource {
 
     func search(keyword: String, page: Int) async throws -> [Book] {
         guard let sr = rule.search else { return [] }
+        if let d = sr.searchDelayMs, d > 0 {
+            // 有的站硬限搜索频率（22听书：6 秒一次），超频只会拿到空结果页
+            try? await Task.sleep(nanoseconds: UInt64(d) * 1_000_000)
+        }
         let url = fill(sr.url, kw: keyword, page: page)
         let gbk = (sr.encoding ?? rule.encoding ?? "utf-8").lowercased().contains("gb")
         let desktop = (sr.ua ?? rule.ua ?? "mobile").lowercased() == "desktop"
@@ -320,7 +326,7 @@ final class RuleSource: BookSource {
             for (key, varName) in need {
                 vars[key] = pageHTML.firstMatch(#"var\s+\#(varName)\s*=\s*['"]([^'"]*)['"]"#) ?? ""
             }
-            url = fill(lr.url, page: page, extra: vars)
+            url = fill(lr.categoryUrl ?? lr.url, page: page, extra: vars)
         } else if page > 1 {
             if let tpl = lr.pageUrl, !tpl.isEmpty {
                 url = fill(tpl, page: page)

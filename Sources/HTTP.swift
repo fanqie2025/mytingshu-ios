@@ -38,10 +38,22 @@ enum HTTPClient {
                      referer: String? = nil,
                      mobile: Bool = true,
                      timeout: TimeInterval = 20) async throws -> (Data, HTTPURLResponse) {
-        let req = try request(urlString, headers: headers, referer: referer, mobile: mobile, timeout: timeout)
-        let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse else { throw SourceError.message("无 HTTP 响应") }
-        return (data, http)
+        // 网络层重试：恋听/22听 这类站 TLS 很不稳定，单次失败不是结论
+        var lastError: Error?
+        for attempt in 0..<3 {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_500_000_000) }
+            do {
+                let req = try request(urlString, headers: headers, referer: referer, mobile: mobile, timeout: timeout)
+                let (data, resp) = try await session.data(for: req)
+                guard let http = resp as? HTTPURLResponse else { throw SourceError.message("无 HTTP 响应") }
+                return (data, http)
+            } catch let e as URLError {
+                lastError = SourceError.message("网络错误：\(e.localizedDescription)")
+            } catch {
+                throw error        // HTTP 状态码一类的错误不重试，交给上层判断
+            }
+        }
+        throw lastError ?? SourceError.message("网络请求失败")
     }
 
     /// 取文本；isGBK=true 时用 GB18030 解码（中文老站常见）

@@ -87,8 +87,8 @@ final class HTMLNode {
         var s = simple.trimmingCharacters(in: .whitespaces)
         if s.isEmpty || s == "*" { return true }
 
-        // 属性过滤 [attr] / [attr=v] / [attr*=v]（值两边的引号可有可无）
-        var attrChecks: [(String, String?, Bool)] = [] // name, value, contains
+        // 属性过滤 [attr] / [attr=v] / [attr*=v] / [attr^=v] / [attr$=v]（值两边的引号可有可无）
+        var attrChecks: [(String, String?, String)] = [] // name, value, op
         while let open = s.firstIndex(of: "["), let close = s[open...].firstIndex(of: "]") {
             let inside = String(s[s.index(after: open)..<close])
             func unquote(_ t: String) -> String {
@@ -96,21 +96,31 @@ final class HTMLNode {
             }
             if let star = inside.range(of: "*=") {
                 attrChecks.append((String(inside[..<star.lowerBound]).lowercased(),
-                                   unquote(String(inside[star.upperBound...])), true))
+                                   unquote(String(inside[star.upperBound...])), "*="))
+            } else if let hat = inside.range(of: "^=") {
+                attrChecks.append((String(inside[..<hat.lowerBound]).lowercased(),
+                                   unquote(String(inside[hat.upperBound...])), "^="))
+            } else if let dollar = inside.range(of: "$=") {
+                attrChecks.append((String(inside[..<dollar.lowerBound]).lowercased(),
+                                   unquote(String(inside[dollar.upperBound...])), "$="))
             } else if let eq = inside.firstIndex(of: "=") {
                 attrChecks.append((String(inside[..<eq]).lowercased(),
-                                   unquote(String(inside[inside.index(after: eq)...])), false))
+                                   unquote(String(inside[inside.index(after: eq)...])), "="))
             } else {
-                attrChecks.append((inside.lowercased(), nil, false))
+                attrChecks.append((inside.lowercased(), nil, ""))
             }
             s.removeSubrange(open...close)
         }
 
-        for (name, value, contains) in attrChecks {
+        for (name, value, op) in attrChecks {
             guard let v = node.attr(name) else { return false }
             if let value {
-                if contains { if !v.contains(value) { return false } }
-                else if v != value { return false }
+                switch op {
+                case "*=": if !v.contains(value) { return false }
+                case "^=": if !v.hasPrefix(value) { return false }
+                case "$=": if !v.hasSuffix(value) { return false }
+                default:   if v != value { return false }
+                }
             }
         }
 
@@ -289,53 +299,109 @@ enum RuleExtractor {
     }
 
     /// 求值 PC 播放页里 `mp3:` 后面的字符串拼接表达式（29听书网）
-    /// 变量名每次随机，有裸赋值（`murl123 = '.mp3';`）与 `var` 两种写法，形态有三种：
-    ///   mp3:'https://…mp3'+murl123+''   /   mp3:''+url123+''   /   mp3:'完整地址'
-    /// 失败时退化为「全文找第一个音频地址」。
+    /// 变量名随机、`var x='…'` 与裸赋值 `x='…'` 都有；变量值本身**也可能是表达式**，要递归求值。
+    /// 收下之前必须校验结果确实是音频地址，否则退化为「全文找第一个音频地址」——
+    /// 不然会静默返回一个缺 `.mp3` 的错地址。
     static func mediaExprURL(_ html: String) -> String? {
-        let assign = #"(?:var\s+)?([A-Za-z_][A-Za-z0-9_$]*)\s*=\s*['"]([^'"]*)['"]"#
+        let assign = #"(?:var\s+)?([A-Za-z_][A-Za-z0-9_$]*)\s*=\s*([^;\n]+)"#
         let names = html.allMatches(assign, group: 1)
-        let values = html.allMatches(assign, group: 2)
-        var vars: [String: String] = [:]
-        for (i, n) in names.enumerated() where i < values.count { vars[n] = values[i] }
+        let exprs = html.allMatches(assign, group: 2)
+        var assigns: [String: String] = [:]
+        for (i, n) in names.enumerated() where i < exprs.count {
+            assigns[n] = exprs[i].trimmingCharacters(in: .whitespacesAndNewlines)
+        }   // 后写覆盖先写（JS 语义）
 
-        if let rawExpr = html.firstMatch(#"\bmp3\s*:\s*([^\n\r]+)"#) {
-            let expr = rawExpr.split(separator: ",").first.map(String.init) ?? rawExpr
-            var parts: [String] = []
-            var buf = ""
-            var quote: Character?
-            for ch in expr {
-                if let q = quote {
-                    if ch == q { quote = nil }
-                    buf.append(ch)
-                } else if ch == "'" || ch == "\"" {
-                    quote = ch
-                    buf.append(ch)
-                } else if ch == "+" {
-                    parts.append(buf); buf = ""
-                } else {
-                    buf.append(ch)
-                }
+        if let tail = html.firstMatch(#"\bmp3\s*:\s*([\s\S]+)"#) {
+            let expr = cutExpr(tail)
+            if let out = evalExpr(expr, assigns: assigns, depth: 0),
+               out.range(of: #"^https?://.+\.(mp3|m4a|aac)(\?|$)"#, options: .regularExpression) != nil {
+                return out
             }
-            parts.append(buf)
-
-            var out = ""
-            var ok = true
-            for p in parts {
-                let t = p.trimmingCharacters(in: .whitespacesAndNewlines)
-                if t.isEmpty { continue }
-                if t.hasPrefix("'") || t.hasPrefix("\"") {
-                    if t.count >= 2 { out += String(t.dropFirst().dropLast()) }
-                } else if let v = vars[t] {
-                    out += v
-                } else {
-                    ok = false
-                    break
-                }
-            }
-            if ok, out.hasPrefix("http") { return out }
         }
         return html.firstMatch(#"(https?://[^'"\s<>]+\.(?:mp3|m4a|aac))"#)
+    }
+
+    /// 顶层 `,` `}` `;` 即止（引号内的不算）
+    private static func cutExpr(_ tail: String) -> String {
+        var out = ""
+        var quote: Character?
+        var prev: Character?
+        for ch in tail {
+            if let q = quote {
+                if ch == q, prev != "\\" { quote = nil }
+                out.append(ch)
+            } else if ch == "'" || ch == "\"" {
+                quote = ch
+                out.append(ch)
+            } else if ch == "," || ch == "}" || ch == ";" {
+                break
+            } else {
+                out.append(ch)
+            }
+            prev = ch
+        }
+        return out
+    }
+
+    /// 按**顶层** `+` 拆开（引号内的 `+` 不拆）
+    private static func splitTopPlus(_ expr: String) -> [String] {
+        var parts: [String] = []
+        var buf = ""
+        var quote: Character?
+        var prev: Character?
+        for ch in expr {
+            if let q = quote {
+                if ch == q, prev != "\\" { quote = nil }
+                buf.append(ch)
+            } else if ch == "'" || ch == "\"" {
+                quote = ch
+                buf.append(ch)
+            } else if ch == "+" {
+                parts.append(buf)
+                buf = ""
+            } else {
+                buf.append(ch)
+            }
+            prev = ch
+        }
+        parts.append(buf)
+        return parts
+    }
+
+    private static func unquote(_ s: String) -> String {
+        var t = s
+        if t.count >= 2, let f = t.first, (f == "'" || f == "\""), t.last == f {
+            t = String(t.dropFirst().dropLast())
+        } else if let f = t.first, f == "'" || f == "\"" {
+            t = String(t.dropFirst())
+        }
+        for (a, b) in [("\\/", "/"), ("\\'", "'"), ("\\\"", "\""), ("\\\\", "\\")] {
+            t = t.replacingOccurrences(of: a, with: b)
+        }
+        return t
+    }
+
+    /// 逐段求值并拼接；任一段解不出就返回 nil（整条作废，交给兜底）
+    private static func evalExpr(_ expr: String, assigns: [String: String], depth: Int) -> String? {
+        if depth > 8 { return nil }
+        var out = ""
+        for raw in splitTopPlus(expr) {
+            let p = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if p.isEmpty { continue }
+            if p.hasPrefix("'") || p.hasPrefix("\"") {
+                out += unquote(p)
+            } else if let v = assigns[p] {
+                // 变量值本身可能是表达式 → 递归求值
+                if let sub = evalExpr(v, assigns: assigns, depth: depth + 1) {
+                    out += sub
+                } else {
+                    out += unquote(v)
+                }
+            } else {
+                return nil
+            }
+        }
+        return out.isEmpty ? nil : out
     }
 
     /// 读 <meta name="x" content="y">
