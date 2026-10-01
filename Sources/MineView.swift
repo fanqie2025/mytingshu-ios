@@ -16,6 +16,7 @@ struct MineView: View {
     @State private var showHistory = false
     @State private var showSettings = false
     @State private var showDiagnostics = false
+    @State private var showCache = false
 
     var body: some View {
         NavigationStack {
@@ -34,6 +35,7 @@ struct MineView: View {
             .sheet(isPresented: $showHistory) { HistoryView() }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
+            .sheet(isPresented: $showCache) { CacheView() }
         }
     }
 
@@ -98,6 +100,9 @@ struct MineView: View {
     private var menuCard: some View {
         VStack(spacing: 0) {
             menuRow(icon: "clock.arrow.circlepath", title: "播放记录") { showHistory = true }
+            rowSeparator
+            // 缓存管理的**唯一入口**（设置页里那一段已删除，不再有第二个地方能改同一件事）
+            menuRow(icon: "arrow.down.circle", title: "缓存管理", trailing: cache.sizeText()) { showCache = true }
             rowSeparator
             menuRow(icon: "square.grid.2x2", title: "源管理与设置") { showSettings = true }
             rowSeparator

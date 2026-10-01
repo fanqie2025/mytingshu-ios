@@ -170,7 +170,6 @@ struct HistoryView: View {
 struct SettingsView: View {
     @ObservedObject var settings = SourceSettings.shared
     @ObservedObject var store = SourceStore.shared
-    @ObservedObject var cache = CacheManager.shared
     @Environment(\.dismiss) private var dismiss
     @State private var showImport = false
     @State private var showDiag = false
@@ -229,24 +228,6 @@ struct SettingsView: View {
                             }
                         }
                     }
-                }
-
-                Section("缓存") {
-                    Picker("自动缓存下集", selection: Binding(
-                        get: { CacheManager.shared.autoCacheNext },
-                        set: { CacheManager.shared.autoCacheNext = $0 })) {
-                        Text("关闭").tag(0)
-                        Text("缓存 1 集").tag(1)
-                        Text("缓存 2 集").tag(2)
-                        Text("缓存 3 集").tag(3)
-                    }
-                    HStack {
-                        Text("已缓存占用")
-                        Spacer()
-                        Text(cache.sizeText()).foregroundColor(.secondary)
-                    }
-                    Button("清空缓存", role: .destructive) { cache.clearAll() }
-                        .disabled(cache.cachedKeys.isEmpty)
                 }
 
                 Section("关于") {
@@ -442,9 +423,50 @@ struct EpisodeListSheet: View {
         return Array(player.episodes.indices)
     }
 
+    /// 从当前播放的那一集开始，批量缓存接下来的 N 集（限量限速在 CacheManager 里）
+    private func startBatchCache() {
+        guard let book = player.book, !player.episodes.isEmpty else { return }
+        let from = player.index
+        Task {
+            await CacheManager.shared.cacheAll(book: book, episodes: player.episodes, from: from)
+        }
+    }
+
     var body: some View {
         NavigationView {
             List {
+                // 批量缓存：限量限速（CacheManager 内：10 集 / 5 秒±1）。
+                // 缓存设置的**唯一入口**在「我的 → 缓存管理」，这里只放跟"当前这本书"有关的动作。
+                Section {
+                    if cache.batching {
+                        HStack(spacing: 10) {
+                            ProgressView().scaleEffect(0.8)
+                            Text("缓存中 \(cache.batchDone)/\(cache.batchTotal)")
+                            Spacer()
+                            Button("停止") { cache.cancelBatch() }
+                        }
+                    } else {
+                        Button {
+                            startBatchCache()
+                        } label: {
+                            Label("缓存接下来 \(CacheManager.batchLimit) 集", systemImage: "arrow.down.circle")
+                        }
+                        .disabled(player.episodes.isEmpty)
+
+                        Button("删除本书缓存", role: .destructive) {
+                            cache.removeCache(for: player.episodes)
+                        }
+                        .disabled(player.episodes.isEmpty || cache.cachedKeys.isEmpty)
+                    }
+                    if !cache.batching, cache.batchTotal > 0, cache.batchDone + cache.batchFailed > 0 {
+                        Text("上次批量：成功 \(cache.batchDone) 集，失败 \(cache.batchFailed) 集")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                } header: {
+                    Text("缓存")
+                }
+
                 // 选集：每 20 集一个格子，点一下只看这一段
                 if chunks.count > 1 {
                     Section {
