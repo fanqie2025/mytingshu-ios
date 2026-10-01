@@ -13,19 +13,30 @@ import Foundation
 final class AbsConfig: ObservableObject {
     static let shared = AbsConfig()
 
+    /// 登录方式："key" = 用 API Key；"password" = 用用户名 + 密码（自动换 token）
+    @Published var mode: String {
+        didSet { UserDefaults.standard.set(mode, forKey: "abs_mode_v1") }
+    }
     @Published var server: String {
         didSet { UserDefaults.standard.set(server, forKey: "abs_server_v1") }
     }
     @Published var token: String {
         didSet { UserDefaults.standard.set(token, forKey: "abs_token_v1") }
     }
-
-    private init() {
-        server = UserDefaults.standard.string(forKey: "abs_server_v1") ?? ""
-        token = UserDefaults.standard.string(forKey: "abs_token_v1") ?? ""
+    @Published var username: String {
+        didSet { UserDefaults.standard.set(username, forKey: "abs_user_v1") }
+    }
+    @Published var password: String {
+        didSet { UserDefaults.standard.set(password, forKey: "abs_pass_v1") }
     }
 
-    var configured: Bool { !server.isEmpty }
+    private init() {
+        mode = UserDefaults.standard.string(forKey: "abs_mode_v1") ?? "key"
+        server = UserDefaults.standard.string(forKey: "abs_server_v1") ?? ""
+        token = UserDefaults.standard.string(forKey: "abs_token_v1") ?? ""
+        username = UserDefaults.standard.string(forKey: "abs_user_v1") ?? ""
+        password = UserDefaults.standard.string(forKey: "abs_pass_v1") ?? ""
+    }
 
     /// 去掉末尾斜杠、补上 http://
     var base: String {
@@ -36,8 +47,43 @@ final class AbsConfig: ObservableObject {
         return s
     }
 
-    func authQuery() -> String {
-        token.isEmpty ? "" : "?token=\(token.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? token)"
+    /// 拿到能用的 token：用户名密码模式就先登录换一个
+    func ensureToken() async throws -> String {
+        let b = base
+        guard !b.isEmpty else { throw SourceError.message("还没配置 ABS 服务器地址") }
+        if mode == "password" {
+            if !username.isEmpty, !password.isEmpty {
+                let t = try await AbsLogin.login(server: b, username: username, password: password)
+                if !t.isEmpty {
+                    token = t
+                    return t
+                }
+            }
+            if !token.isEmpty { return token }
+            throw SourceError.message("请填用户名和密码（或切到 API Key）")
+        }
+        guard !token.isEmpty else { throw SourceError.message("请填 API Key") }
+        return token
+    }
+}
+
+/// ABS 登录：用户名 + 密码 → token
+enum AbsLogin {
+    static func login(server: String, username: String, password: String) async throws -> String {
+        func esc(_ s: String) -> String {
+            s.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+        }
+        let body = #"{"username":"\#(esc(username))","password":"\#(esc(password))"}"#
+        let text = try await HTTPClient.postJSON(server + "/api/login", json: body,
+                                                referer: server, mobile: false)
+        guard let d = text.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+            throw SourceError.parse("登录返回不是 JSON")
+        }
+        if let u = obj["user"] as? [String: Any], let t = u["token"] as? String, !t.isEmpty { return t }
+        if let t = obj["token"] as? String, !t.isEmpty { return t }
+        throw SourceError.message("登录失败：用户名或密码不对")
     }
 }
 
@@ -52,7 +98,8 @@ final class AbsSource: BookSource {
     private func api(_ path: String) async throws -> [String: Any] {
         let base = AbsConfig.shared.base
         guard !base.isEmpty else { throw SourceError.message("还没配置 ABS 服务器地址") }
-        let token = AbsConfig.shared.token
+        // 用户名密码模式会在这里自动登录换 token
+        let token = try await AbsConfig.shared.ensureToken()
         let url = "\(base)\(path)\(path.contains("?") ? "&" : "?")token=\(token.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? token)"
         let text = try await HTTPClient.text(url, referer: base, mobile: false)
         guard let data = text.data(using: .utf8),

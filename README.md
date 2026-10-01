@@ -32,13 +32,16 @@ https://github.com/fanqie2025/mytingshu-ios/releases/latest/download/MyTingShu.i
 
 ## 导入书源
 
+**App 不内置任何抓站书源，也不预填订阅地址 —— 必须自己手动导入。**
+
 `设置 → 源管理 → 导入书源`：
 
-- **一键导入**：点「用默认订阅地址（一键导入）」，直接拉下面这个订阅文件；
-- **订阅地址**：也可以自己填别的返回书源 JSON 的 URL；
+- **订阅地址**：填一个返回书源 JSON 的 URL（下面有我的书源仓库地址）；
 - **粘贴 JSON**：直接把书源 JSON 贴进去（支持单个对象、数组，或 `{"sources":[…]}` 包裹）。
 
-我的书源仓库（公开，仅供自用测试）：
+导入后，`源管理` 里会列出每个源的**名字、站点地址和说明**，可以逐个开关。
+
+### 我的书源仓库（公开）
 
 ```
 https://cdn.jsdelivr.net/gh/fanqie2025/mytingshu-sources@main/subscription/sources.json
@@ -46,6 +49,16 @@ https://raw.githubusercontent.com/fanqie2025/mytingshu-sources/main/subscription
 ```
 
 > 国内优先用 jsDelivr 那条（`raw.githubusercontent.com` 常连不上）。
+
+里面的书源：
+
+| 源 | 说明 | 形态 |
+| --- | --- | --- |
+| **有听网** | 有声小说 / 评书 / 相声，搜索分类都全 | JSON 规则，导入即用 |
+| **275听书** | 多播有声书，音频走正则可取 | JSON 规则，导入即用 |
+| **单田芳评书网** | 单田芳 / 袁阔成 / 连丽如评书（只能分类浏览，站内搜索不可用） | JSON 规则，导入即用 |
+| 22听书、书音FM、酷我畅听、爱听书、13听书网、乐听网、恋听网、29听书网 | 需要站点专属逻辑（验证码 / 签名 / 专用换地址接口），**JSON 规则表达不了**，源码归档在书源仓库 `native-sources/`，目前**没有编译进 App** | Swift 原生源（归档） |
+| **Audiobookshelf** | 连你自己的服务器（App 内置连接器，填地址 + API Key 或用户名密码） | 内置 |
 
 一个书源条目的格式（字段都可选）：
 

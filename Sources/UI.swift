@@ -51,7 +51,7 @@ struct MiniPlayerBar: View {
             .padding(.leading, 10)
             .padding(.trailing, 10)
             .padding(.bottom, 4)
-            .sheet(isPresented: $showFull) { PlayerView() }
+            .fullScreenCover(isPresented: $showFull) { PlayerView() }
         }
     }
 }
@@ -532,6 +532,9 @@ struct SettingsView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(src.name)
                                 Text(src.host).font(.caption2).foregroundColor(.secondary)
+                                if !src.desc.isEmpty {
+                                    Text(src.desc).font(.caption2).foregroundColor(.secondary).lineLimit(2)
+                                }
                             }
                             Spacer()
                             if src.id == AbsSource.sourceId {
@@ -650,13 +653,6 @@ struct SettingsView: View {
                         Task { await doImportURL() }
                     } label: { busy ? AnyView(ProgressView()) : AnyView(Text("从地址导入")) }
                     .disabled(importURL.isEmpty || busy)
-                    if !defaultSubscriptionURL.isEmpty {
-                        Button("用默认订阅地址（一键导入）") {
-                            importURL = defaultSubscriptionURL
-                            Task { await doImportURL() }
-                        }
-                        .disabled(busy)
-                    }
                 }
                 Section("或直接粘贴书源 JSON") {
                     TextEditor(text: $importText)
@@ -863,7 +859,7 @@ struct PlayerView: View {
             .navigationTitle(player.book?.title ?? "正在播放")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("收起") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("返回") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("详情") { showInfo = true } }
             }
             .sheet(isPresented: $showEpisodes) { EpisodeListSheet() }
@@ -1425,7 +1421,10 @@ struct AbsConfigSheet: View {
     @ObservedObject var cfg = AbsConfig.shared
     @Environment(\.dismiss) private var dismiss
     @State private var server = ""
+    @State private var mode = "key"
     @State private var token = ""
+    @State private var username = ""
+    @State private var password = ""
     @State private var result = ""
     @State private var busy = false
 
@@ -1438,11 +1437,32 @@ struct AbsConfigSheet: View {
                         .disableAutocorrection(true)
                         .keyboardType(.URL)
                 }
-                Section("API Token") {
-                    TextField("ABS 里 设置 → 用户 → API Token", text: $token)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
+
+                Section("登录方式（可随时切换）") {
+                    Picker("", selection: $mode) {
+                        Text("API Key").tag("key")
+                        Text("用户名 + 密码").tag("password")
+                    }
+                    .pickerStyle(.segmented)
                 }
+
+                if mode == "key" {
+                    Section("API Key") {
+                        TextField("ABS 里 设置 → 用户 → API Token", text: $token)
+                            .textInputAutocapitalization(.never)
+                            .disableAutocorrection(true)
+                    }
+                } else {
+                    Section("账号") {
+                        TextField("用户名", text: $username)
+                            .textInputAutocapitalization(.never)
+                            .disableAutocorrection(true)
+                        SecureField("密码", text: $password)
+                    }
+                    Text("保存时用账号登录一次，换成本机保存的 token；以后一直用它。")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+
                 Section {
                     Button { Task { await test() } } label: {
                         if busy { HStack { ProgressView(); Text("测试中…") } } else { Text("保存并测试连接") }
@@ -1451,6 +1471,7 @@ struct AbsConfigSheet: View {
                         Text(result).font(.caption)
                     }
                 }
+
                 Section {
                     Text("填好后，你的 ABS 书库会作为一个源出现在「书源」和「搜索」里；音频直接从你的服务器播放，不经过任何第三方。")
                         .font(.caption).foregroundColor(.secondary)
@@ -1462,13 +1483,22 @@ struct AbsConfigSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("保存") { save(); dismiss() } }
             }
-            .onAppear { server = cfg.server; token = cfg.token }
+            .onAppear {
+                server = cfg.server
+                mode = cfg.mode
+                token = cfg.token
+                username = cfg.username
+                password = cfg.password
+            }
         }
     }
 
     private func save() {
         cfg.server = server.trimmingCharacters(in: .whitespacesAndNewlines)
+        cfg.mode = mode
         cfg.token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        cfg.username = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        cfg.password = password
     }
 
     private func test() async {

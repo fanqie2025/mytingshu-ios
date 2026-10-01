@@ -129,7 +129,7 @@ final class Diagnostics: ObservableObject {
     }
 }
 
-/// 默认订阅地址（书源仓库，公开）：App 不内置书源，这里只给「一键导入」用
-let defaultSubscriptionURL = "https://cdn.jsdelivr.net/gh/fanqie2025/mytingshu-sources@main/subscription/sources.json"
+/// App **不内置任何书源、也不预填订阅地址** —— 必须自己在「设置 → 导入书源」里导入。
+let defaultSubscriptionURL = ""
 
 
