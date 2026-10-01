@@ -17,9 +17,21 @@ struct SourceRule: Codable, Identifiable {
 
     var search: ListRule?
     var categories: [CategoryRule]?
+    var categoriesFrom: CategoriesFrom?     // 动态分类导航（从分类大全页抓）
     var detail: DetailRule?
     var audio: AudioRule?
     var verification: VerificationRule?
+
+    /// 分类导航不是写死的，而是从站点的「分类大全」页抓（乐听/29听 的 dl.pd-class）
+    struct CategoriesFrom: Codable {
+        var url: String                     // 分类大全页（支持 {host}）
+        var group: String                   // 分组容器选择器
+        var groupTitle: String?             // 组名取值（默认 "dt@text"）
+        var item: String                    // 分类条目选择器
+        var title: String?                  // 默认 "@text"
+        var urlRule: String?                // 默认 "@href"
+        var ua: String?
+    }
 
     struct CategoryRule: Codable {
         var title: String
@@ -43,6 +55,11 @@ struct SourceRule: Codable, Identifiable {
         var body: String?                  // POST 表单体（支持 {kw} {page}）
         var ua: String?                    // 本步骤 UA："mobile" | "desktop"
         var headers: [String: String]?
+        // v2：JSON 接口模式（分类列表/搜索接口返回 JSON）
+        var kind: String?                  // "html"（默认）| "json"
+        var items: String?                 // JSON：数组路径（留空 = 裸数组）
+        var node: String?                  // JSON：每条再下沉一层（如 "novel"）
+        var apiVars: [String: String]?     // 先 GET 分类页读出 `var <值> = '...'` 再调接口
     }
 
     struct DetailRule: Codable {
@@ -87,6 +104,8 @@ struct SourceRule: Codable, Identifiable {
         var sign: Sign?                    // 生成签名
         var replace: [[String]]?           // 地址改写，如 [["https://mp3pd.","http://mp3pd."]]
         var cookies: [String: String]?     // 请求前写的 cookie（值 "randHex16" 表示随机 16 位 hex）
+        var contentType: String?           // "form"（默认）| "json"
+        var urlVars: [String: String]?     // 从 episode.url 用正则取值（组1）供 {变量} 用（29听取 nid/cid）
 
         struct Sign: Codable {
             var kind: String               // ptcmsSp | md5 | base64Quote
@@ -94,6 +113,7 @@ struct SourceRule: Codable, Identifiable {
             var alphabet: String?          // ptcmsSp 用
             var header: String?            // 放进请求头（否则放进 body 参数）
             var param: String?             // 放进 body 的参数名
+            var `var`: String?             // 放进变量，供 body 模板用 {变量}（乐听的 encodedData）
         }
     }
 
@@ -196,6 +216,9 @@ final class RuleSource: BookSource {
     }
 
     private func parseList(_ html: String, using lr: SourceRule.ListRule) -> [Book] {
+        if (lr.kind ?? "html").lowercased() == "json" {
+            return parseJSONList(html, using: lr)
+        }
         let doc = HTMLParser.parse(html)
         let nodes = HTMLNode.select(lr.list, in: [doc])
         let useGBK = (lr.encoding ?? rule.encoding ?? "utf-8").lowercased().contains("gb")
@@ -239,6 +262,28 @@ final class RuleSource: BookSource {
     }
 
     func menus() async throws -> [CategoryMenu] {
+        // 动态分类导航（分类大全页里按分组列出来）
+        if let cf = rule.categoriesFrom {
+            let gbk = (rule.encoding ?? "utf-8").lowercased().contains("gb")
+            let desktop = (cf.ua ?? rule.ua ?? "mobile").lowercased() == "desktop"
+            let html = try await fetch(fill(cf.url), gbk: gbk, desktop: desktop)
+            let doc = HTMLParser.parse(html)
+            var menus: [CategoryMenu] = []
+            for g in HTMLNode.select(cf.group, in: [doc]) {
+                let gname = RuleExtractor.value(cf.groupTitle ?? "dt@text", in: [g])
+                var cats: [SourceCategory] = []
+                for a in HTMLNode.select(cf.item, in: [g]) {
+                    let t = RuleExtractor.value(cf.title ?? "@text", in: [a])
+                    let u = RuleExtractor.value(cf.urlRule ?? "@href", in: [a])
+                    guard !t.isEmpty, !u.isEmpty else { continue }
+                    cats.append(SourceCategory(title: t, url: u.absoluteURL(base: base)))
+                }
+                if !cats.isEmpty {
+                    menus.append(CategoryMenu(title: gname.isEmpty ? "分类" : gname, categories: cats))
+                }
+            }
+            if !menus.isEmpty { return menus }
+        }
         guard let cats = rule.categories, !cats.isEmpty else { return [] }
         var groups: [String: [SourceCategory]] = [:]
         for c in cats {
@@ -250,17 +295,80 @@ final class RuleSource: BookSource {
 
     func books(in category: SourceCategory, page: Int) async throws -> [Book] {
         guard let lr = rule.search ?? listRuleFromDetail() else { return [] }
+        let gbk = (rule.encoding ?? "utf-8").lowercased().contains("gb")
+        let desktop = (lr.ua ?? rule.ua ?? "mobile").lowercased() == "desktop"
         var url = category.url
-        if page > 1 {
+        var vars: [String: String] = [:]
+        if let need = lr.apiVars, !need.isEmpty {
+            // 分类页里内联着接口参数（如 var __API_KEY='7'），先读出来再调接口
+            let pageHTML = try await fetch(category.url, gbk: gbk, desktop: desktop)
+            for (key, varName) in need {
+                vars[key] = pageHTML.firstMatch(#"var\s+\#(varName)\s*=\s*['"]([^'"]*)['"]"#) ?? ""
+            }
+            url = fill(lr.url, page: page, extra: vars)
+        } else if page > 1 {
             if let tpl = lr.pageUrl, !tpl.isEmpty {
                 url = fill(tpl, page: page)
             } else if url.contains("?") {
                 url = "\(url)&page=\(page)"
             }
         }
-        let gbk = (rule.encoding ?? "utf-8").lowercased().contains("gb")
-        let html = try await fetch(url, gbk: gbk)
-        return parseList(html, using: lr)
+        let text = try await fetch(url, gbk: gbk, desktop: desktop, extraHeaders: lr.headers ?? [:])
+        return parseList(text, using: lr)
+    }
+
+    /// JSON 接口模式的列表解析：字段写点号路径；一条规则同时兼容
+    /// 「{data:[{title,url,pic,boyin,content}]}」与「[{novel:{name,url,cover,intro}}]」两种形态
+    private func parseJSONList(_ text: String, using lr: SourceRule.ListRule) -> [Book] {
+        guard let data = text.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) else { return [] }
+        var arr: [Any] = []
+        if let path = lr.items, !path.isEmpty {
+            arr = (anyValue(at: path, in: obj) as? [Any]) ?? []
+        } else if let a = obj as? [Any] {
+            arr = a
+        } else if let dict = obj as? [String: Any] {
+            for key in ["data", "results", "list", "items"] {
+                if let a = dict[key] as? [Any] { arr = a; break }
+            }
+        }
+
+        func pick(_ paths: [String?], _ node: Any) -> String {
+            for p in paths {
+                guard let p, !p.isEmpty else { continue }
+                let v = anyString(anyValue(at: p, in: node) ?? "")
+                if !v.isEmpty { return v }
+            }
+            return ""
+        }
+
+        var books: [Book] = []
+        for item in arr {
+            var node: Any = item
+            if let n = lr.node, !n.isEmpty, let sub = anyValue(at: n, in: item) { node = sub }
+            let title = cleanText(pick([lr.title, "title", "name"], node))
+            let url = pick([lr.urlRule, "url", "bookurl"], node)
+            guard !title.isEmpty, !url.isEmpty else { continue }
+            let cover = pick([lr.cover, "cover", "pic", "img", "image"], node)
+            let artist = pick([lr.artist, "boyin", "artist", "narrator"], node)
+            let author = pick([lr.author, "author"], node)
+            let intro = pick([lr.intro, "content", "intro", "description"], node)
+            books.append(Book(sourceId: id, title: title, author: author, artist: artist,
+                              cover: cover.absoluteURL(base: base),
+                              bookURL: url.absoluteURL(base: base),
+                              intro: intro))
+        }
+        return books
+    }
+
+    private func anyValue(at path: String, in obj: Any) -> Any? {
+        var cur: Any? = obj
+        for part in path.split(separator: ".") {
+            if let dict = cur as? [String: Any] { cur = dict[String(part)] }
+            else if let arr = cur as? [Any], let idx = Int(part), idx < arr.count { cur = arr[idx] }
+            else { return nil }
+        }
+        return cur
     }
 
     /// 有些源没有单独的搜索规则，但分类页与搜索页结构一致时可用
@@ -402,6 +510,17 @@ final class RuleSource: BookSource {
             let u = RuleExtractor.regex(a.pattern ?? "", in: html)
             return await HTTPClient.resolveFinalURL(u.absoluteURL(base: base), referer: referer)
 
+        case "pcplayer":
+            // 先按正则从章节链接里取值，拼出 PC 播放页，再求值页面里的 `mp3:` 拼接表达式
+            // （29听书网：移动播放页封在混淆 JS 里，PC 站 /player.html 才直出地址）
+            var vars: [String: String] = [:]
+            for (k, pat) in a.urlVars ?? [:] {
+                vars[k] = episode.url.firstMatch(pat) ?? ""
+            }
+            let pageURL = fillText(a.url ?? episode.url, extra: vars)
+            let html = try await fetch(pageURL, desktop: true, extraHeaders: a.headers ?? [:])
+            return RuleExtractor.mediaExprURL(html) ?? ""
+
         case "post":
             // 1) 先拉章节页，从 <meta> 取变量（有些站限流时页面是空壳，所以整段可重试）
             let page = try await chapterPage()
@@ -425,11 +544,15 @@ final class RuleSource: BookSource {
             headers["Referer"] = referer
             headers["X-Requested-With"] = headers["X-Requested-With"] ?? "XMLHttpRequest"
 
-            // 3) 签名（塞请求头或 body 参数）
+            // 3) 签名（塞变量 / 请求头 / body 参数）
             if let sg = a.sign {
                 let input = fillVars(sg.input ?? "")
                 let sig = signValue(sg, input: input)
-                if let h = sg.header, !h.isEmpty {
+                if let v = sg.var, !v.isEmpty {
+                    // 放进变量，再重新渲染一次 body（乐听：{"encodedData":"{enc}"}）
+                    vars[v] = sig
+                    bodyText = fillVars(a.body ?? "")
+                } else if let h = sg.header, !h.isEmpty {
                     headers[h] = sig
                 } else {
                     bodyText += (bodyText.isEmpty ? "" : "&") + "\(sg.param ?? "sp")=\(sig)"
@@ -443,8 +566,14 @@ final class RuleSource: BookSource {
             }
 
             let apiURL = fill(fillVars(a.url ?? episode.url), extra: vars)
-            let resp = try await HTTPClient.postForm(apiURL, body: bodyText, headers: headers,
+            let resp: String
+            if (a.contentType ?? "form").lowercased() == "json" {
+                resp = try await HTTPClient.postJSON(apiURL, json: bodyText, headers: headers,
                                                      referer: referer, mobile: !desktop)
+            } else {
+                resp = try await HTTPClient.postForm(apiURL, body: bodyText, headers: headers,
+                                                     referer: referer, mobile: !desktop)
+            }
 
             // 5) 状态字段校验：很多站限流时 HTTP 200 但 status 不是 200
             if let sf = a.statusField, !sf.isEmpty {

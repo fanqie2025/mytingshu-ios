@@ -288,6 +288,56 @@ enum RuleExtractor {
         return (node.attr(accessor) ?? "").htmlDecoded
     }
 
+    /// 求值 PC 播放页里 `mp3:` 后面的字符串拼接表达式（29听书网）
+    /// 变量名每次随机，有裸赋值（`murl123 = '.mp3';`）与 `var` 两种写法，形态有三种：
+    ///   mp3:'https://…mp3'+murl123+''   /   mp3:''+url123+''   /   mp3:'完整地址'
+    /// 失败时退化为「全文找第一个音频地址」。
+    static func mediaExprURL(_ html: String) -> String? {
+        let assign = #"(?:var\s+)?([A-Za-z_][A-Za-z0-9_$]*)\s*=\s*['"]([^'"]*)['"]"#
+        let names = html.allMatches(assign, group: 1)
+        let values = html.allMatches(assign, group: 2)
+        var vars: [String: String] = [:]
+        for (i, n) in names.enumerated() where i < values.count { vars[n] = values[i] }
+
+        if let rawExpr = html.firstMatch(#"\bmp3\s*:\s*([^\n\r]+)"#) {
+            let expr = rawExpr.split(separator: ",").first.map(String.init) ?? rawExpr
+            var parts: [String] = []
+            var buf = ""
+            var quote: Character?
+            for ch in expr {
+                if let q = quote {
+                    if ch == q { quote = nil }
+                    buf.append(ch)
+                } else if ch == "'" || ch == "\"" {
+                    quote = ch
+                    buf.append(ch)
+                } else if ch == "+" {
+                    parts.append(buf); buf = ""
+                } else {
+                    buf.append(ch)
+                }
+            }
+            parts.append(buf)
+
+            var out = ""
+            var ok = true
+            for p in parts {
+                let t = p.trimmingCharacters(in: .whitespacesAndNewlines)
+                if t.isEmpty { continue }
+                if t.hasPrefix("'") || t.hasPrefix("\"") {
+                    if t.count >= 2 { out += String(t.dropFirst().dropLast()) }
+                } else if let v = vars[t] {
+                    out += v
+                } else {
+                    ok = false
+                    break
+                }
+            }
+            if ok, out.hasPrefix("http") { return out }
+        }
+        return html.firstMatch(#"(https?://[^'"\s<>]+\.(?:mp3|m4a|aac))"#)
+    }
+
     /// 读 <meta name="x" content="y">
     static func meta(_ name: String, in html: String) -> String {
         html.firstMatch("<meta[^>]+name=\"\(name)\"[^>]*content=\"([^\"]*)\"") ??
