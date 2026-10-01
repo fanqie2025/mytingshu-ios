@@ -625,6 +625,13 @@ struct SettingsView: View {
                         Task { await doImportURL() }
                     } label: { busy ? AnyView(ProgressView()) : AnyView(Text("从地址导入")) }
                     .disabled(importURL.isEmpty || busy)
+                    if !defaultSubscriptionURL.isEmpty {
+                        Button("用默认订阅地址（一键导入）") {
+                            importURL = defaultSubscriptionURL
+                            Task { await doImportURL() }
+                        }
+                        .disabled(busy)
+                    }
                 }
                 Section("或直接粘贴书源 JSON") {
                     TextEditor(text: $importText)
