@@ -33,12 +33,7 @@ struct SearchScreen: View {
             .background(Theme.bg)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Book.self) { book in
-                // T9: 接 DetailView(book: book)
-                Text("详情页待接：\(book.title)")
-                    .font(Theme.meta)
-                    .foregroundColor(Theme.text2)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Theme.bg)
+                DetailView(book: book)
             }
             .sheet(item: $verifyTarget) { target in
                 VerificationSheet(source: target.source, keyword: target.keyword) {

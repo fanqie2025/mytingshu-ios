@@ -39,24 +39,19 @@ struct MyTingShuApp: App {
 
 struct RootView: View {
     var body: some View {
-        // 迷你播放条挂在每个页签内容的底部（而不是挂在 TabView 上），
-        // 这样它不会盖住底部 dock 栏。
+        // 三页签对齐唔语：书架 / 发现 / 我的（原「搜索 / 书源 / 历史 / 设置」不再占页签，
+        // 搜索降为书架页顶部胶囊入口，历史与设置在「我的」里）
+        // 迷你播放条挂在每个页签内容的底部（而不是挂在 TabView 上），这样它不会盖住底部 dock 栏。
         TabView {
-            BookshelfView()
+            ShelfView()
                 .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
                 .tabItem { Label("书架", systemImage: "books.vertical.fill") }
-            SearchView()
+            DiscoverView()
                 .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
-                .tabItem { Label("搜索", systemImage: "magnifyingglass") }
-            HomeView()
+                .tabItem { Label("发现", systemImage: "flame.fill") }
+            MineView()
                 .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
-                .tabItem { Label("书源", systemImage: "square.grid.2x2") }
-            HistoryView()
-                .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
-                .tabItem { Label("历史", systemImage: "clock.arrow.circlepath") }
-            SettingsView()
-                .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
-                .tabItem { Label("设置", systemImage: "gearshape") }
+                .tabItem { Label("我的", systemImage: "person.fill") }
         }
         .tint(Theme.accent)
         .background(Theme.bg)

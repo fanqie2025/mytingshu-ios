@@ -48,18 +48,11 @@ struct ShelfView: View {
             .background(Theme.bg)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Book.self) { book in
-                // T9: 接 DetailView(book: book)
-                Text("详情页待接：\(book.title)")
-                    .font(Theme.meta)
-                    .foregroundColor(Theme.text2)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Theme.bg)
+                DetailView(book: book)
             }
-            .sheet(isPresented: $showSearch) {
-                // T9: 接 SearchScreen()
-                Text("搜索页待接")
-                    .font(Theme.meta)
-                    .foregroundColor(Theme.text2)
+            // 搜索页是整屏 + 右上「取消」（截图 02），所以用 fullScreenCover 而不是卡片 sheet
+            .fullScreenCover(isPresented: $showSearch) {
+                SearchScreen()
             }
             .overlay {
                 if showTips {
