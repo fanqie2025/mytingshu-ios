@@ -18,7 +18,7 @@ xcodebuild -version || true
 echo "==> 编译 Swift（$(ls Sources/*.swift | wc -l | tr -d ' ') 个文件）"
 swiftc \
   -sdk "$SDK" \
-  -target arm64-apple-ios15.0 \
+  -target arm64-apple-ios16.0 \
   -swift-version 5 \
   -O \
   -whole-module-optimization \

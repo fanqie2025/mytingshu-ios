@@ -2,9 +2,10 @@ name: build-ios-ipa
 
 # 云端 macOS 编译 → 未签名 IPA（巨魔 TrollStore 直接安装）
 # 注意：本仓库只是 App 外壳，不含任何书源；书源在 App 内「设置 → 导入书源」在线订阅导入。
+# feat/** 分支只做「编译 + 产物自检 + 传 artifact」，**不发 Release**（手机上安装的 latest 只由 main 更新）。
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'feat/**' ]
   workflow_dispatch:
 
 permissions:
@@ -41,7 +42,9 @@ jobs:
           path: build/MyTingShu.ipa
           if-no-files-found: error
 
-      - name: 发到 Release（手机可直接下载）
+      # 只有 main 才发布：特性分支（feat/**）的构建只作为开发验证的 artifact
+      - name: 发到 Release（仅 main，手机可直接下载）
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest

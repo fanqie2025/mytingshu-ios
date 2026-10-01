@@ -4,7 +4,9 @@ import WebKit
 
 // MARK: - 迷你播放条
 
-/// 迷你播放条：**小圆圈/胶囊**（不是整条），点一下开播放页，右侧是播放/暂停。
+/// 迷你播放条（唔语形态，截图 01/05/06）：**非全宽胶囊**，`Theme.surface` 底，
+/// 内含 40pt 圆形封面 + 1 行标题 + **蓝色播放三角**（不是圆形按钮）；
+/// 宽随标题变化、左对齐。点胶囊开播放页，点三角播放/暂停。
 /// 放在每个页签内容的底部（不贴在 TabView 上），这样不会盖住底部 dock 栏。
 struct MiniPlayerBar: View {
     @ObservedObject var player = PlayerEngine.shared
@@ -12,45 +14,35 @@ struct MiniPlayerBar: View {
 
     var body: some View {
         if let book = player.book, let ep = player.currentEpisode {
-            HStack(spacing: 10) {
-                Button { showFull = true } label: {
-                    HStack(spacing: 8) {
-                        AsyncImage(url: URL(string: book.cover)) { img in
-                            img.resizable().aspectRatio(contentMode: .fill)
-                        } placeholder: {
-                            Color.orange.opacity(0.25)
-                        }
-                        .frame(width: 36, height: 36)
-                        .clipShape(Circle())
-                        .overlay(Circle().stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
+            HStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    CoverImage(url: book.cover, side: 40, radius: 20)
 
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(ep.title.isEmpty ? book.title : ep.title)
-                                .font(.caption).lineLimit(1)
-                            Text(book.title).font(.caption2).foregroundColor(.secondary).lineLimit(1)
-                        }
-                        .frame(maxWidth: 150, alignment: .leading)
+                    Text(ep.title.isEmpty ? book.title : ep.title)
+                        .font(Theme.metaSmall)
+                        .foregroundColor(Theme.text1)
+                        .lineLimit(1)
+
+                    Button { player.toggle() } label: {
+                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(Theme.accent)
+                            .frame(width: 30, height: 30)
                     }
-                    .padding(.leading, 6)
-                    .padding(.trailing, 10)
-                    .padding(.vertical, 5)
-                    .background(.ultraThinMaterial, in: Capsule())
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-
-                Button { player.toggle() } label: {
-                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 15, weight: .bold))
-                        .frame(width: 36, height: 36)
-                        .background(.ultraThinMaterial, in: Circle())
-                }
-                .buttonStyle(.plain)
+                .padding(.leading, 6)
+                .padding(.trailing, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(Theme.surface))
+                .contentShape(Capsule())
+                .onTapGesture { showFull = true }
 
                 Spacer(minLength: 0)
             }
-            .padding(.leading, 10)
-            .padding(.trailing, 10)
+            .padding(.horizontal, Theme.Space.page)
             .padding(.bottom, 4)
+            // T9: 此处改为 PlayerScreen（T8 产出）
             .fullScreenCover(isPresented: $showFull) { PlayerView() }
         }
     }
@@ -621,7 +613,7 @@ struct SettingsView: View {
                 }
 
                 Section("关于") {
-                    HStack { Text("版本"); Spacer(); Text("0.1.0").foregroundColor(.secondary) }
+                    HStack { Text("版本"); Spacer(); Text(Bundle.main.appVersionText).foregroundColor(.secondary) }
                     HStack { Text("源数量"); Spacer(); Text("\(settings.enabledSources.count)/\(store.all.count)").foregroundColor(.secondary) }
                     Button("诊断 / 源测试") { showDiag = true }
                     Text("本 App 只做播放器，内容来自各听书站；音频版权归原站所有。")

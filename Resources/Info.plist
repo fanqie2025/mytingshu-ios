@@ -17,11 +17,11 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.2.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>MinimumOSVersion</key>
-	<string>15.0</string>
+	<string>16.0</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<!-- 手写 .app bundle 时这几个「平台信息」字段必须补上，否则 iOS 可能装不上/起不来 -->
