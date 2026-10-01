@@ -8,7 +8,8 @@ import Foundation
 // 然后用 /api/libraries、/api/libraries/{id}/items、/api/items/{id} 取书与音频流。
 
 /// ABS 配置（存 UserDefaults）
-@MainActor
+/// 注意：**不能**标 @MainActor —— BookSource 的方法是在后台跑的，
+/// 标了就变成「主线程隔离属性不能从非隔离上下文引用」编译错误。
 final class AbsConfig: ObservableObject {
     static let shared = AbsConfig()
 
@@ -49,10 +50,9 @@ final class AbsSource: BookSource {
     var host: String { AbsConfig.shared.base.isEmpty ? "about:blank" : AbsConfig.shared.base }
 
     private func api(_ path: String) async throws -> [String: Any] {
-        let cfg = await AbsConfig.shared
-        let base = await cfg.base
+        let base = AbsConfig.shared.base
         guard !base.isEmpty else { throw SourceError.message("还没配置 ABS 服务器地址") }
-        let token = await cfg.token
+        let token = AbsConfig.shared.token
         let url = "\(base)\(path)\(path.contains("?") ? "&" : "?")token=\(token.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? token)"
         let text = try await HTTPClient.text(url, referer: base, mobile: false)
         guard let data = text.data(using: .utf8),
