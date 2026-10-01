@@ -221,13 +221,13 @@ final class RuleSource: BookSource {
     private func parseList(_ html: String, using lr: SourceRule.ListRule) -> [Book] {
         switch (lr.kind ?? "html").lowercased() {
         case "json":
-            if let d = html.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) {
+            if let d = stripBOM(html).data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) {
                 return parseObjectList(o, using: lr)
             }
             return []
         case "literal":
             // 单引号 JS/Python 字面量（酷我 `rformat=json` 名不副实）
-            if let o = parseLiteralObject(html) { return parseObjectList(o, using: lr) }
+            if let o = parseLiteralObject(stripBOM(html)) { return parseObjectList(o, using: lr) }
             return []
         default:
             break
@@ -418,9 +418,9 @@ final class RuleSource: BookSource {
         if kind == "json" || kind == "literal" {
             let obj: Any?
             if kind == "json" {
-                obj = html.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+                obj = stripBOM(html).data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }
             } else {
-                obj = parseLiteralObject(html)
+                obj = parseLiteralObject(stripBOM(html))
             }
             guard let root = obj else { throw SourceError.parse("详情响应不是 \(kind) 结构") }
             let arr = (anyValue(at: d.episodes, in: root) as? [Any]) ?? []
@@ -575,7 +575,7 @@ final class RuleSource: BookSource {
             if !apiURL.hasPrefix("http") { apiURL = fill(a.url ?? episode.url, extra: vars) }
             let text = try await fetch(apiURL, desktop: desktop, extraHeaders: a.headers ?? [:])
             var raw = jsonValue(text, field: a.field, alt: a.fieldAlt)
-            if raw.isEmpty, let root = parseLiteralObject(text) {
+            if raw.isEmpty, let root = parseLiteralObject(stripBOM(text)) {
                 if let f = a.field, !f.isEmpty { raw = anyString(anyValue(at: f, in: root) ?? "") }
                 if raw.isEmpty, let alt = a.fieldAlt, !alt.isEmpty {
                     raw = anyString(anyValue(at: alt, in: root) ?? "")
@@ -696,7 +696,7 @@ final class RuleSource: BookSource {
 
     /// 从 JSON 文本里按点号路径取值（先 field，取不到再 fieldAlt）
     private func jsonValue(_ text: String, field: String?, alt: String?) -> String {
-        guard let data = text.data(using: .utf8),
+        guard let data = stripBOM(text).data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) else { return "" }
         var v = ""
         if let f = field, !f.isEmpty { v = value(at: f, in: obj) }

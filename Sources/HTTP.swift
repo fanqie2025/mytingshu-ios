@@ -305,6 +305,13 @@ func anyString(_ v: Any?) -> String {
     }
 }
 
+/// 去掉 UTF-8 BOM —— 有听网的音频接口返回就带 BOM，JSONSerialization 会直接失败
+func stripBOM(_ s: String) -> String {
+    var t = s
+    while let f = t.unicodeScalars.first, f.value == 0xFEFF { t.removeFirst() }
+    return t
+}
+
 /// 清洗接口返回的富文本（去标签 + 还原实体 + 再解一层 \uXXXX）
 /// 酷我 ft=music 的 ARTIST 是双重转义后的 `三体宇宙\u0026喜马拉雅`，单靠 htmlDecoded 解不掉
 func cleanText(_ v: Any?) -> String {
@@ -388,8 +395,9 @@ func normalizeLiteral(_ text: String) -> String {
 
 /// 字面量文本 → JSON 对象（先归一化；失败返回 nil）
 func parseLiteralObject(_ text: String) -> Any? {
-    if let d = text.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) { return o }
-    let norm = normalizeLiteral(text)
+    let body = stripBOM(text)
+    if let d = body.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) { return o }
+    let norm = normalizeLiteral(body)
     if let d = norm.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) { return o }
     return nil
 }
@@ -402,3 +410,4 @@ func percentEncodedIfNeeded(_ s: String) -> String {
     allowed.insert(charactersIn: "-._~:/?#[]@!$&'()*+,;=%")
     return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
 }
+
