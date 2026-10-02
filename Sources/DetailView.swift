@@ -25,6 +25,10 @@ struct DetailView: View {
     @State private var introExpanded = false
     @State private var drawerFraction: CGFloat = 0.46
     @State private var drawerCollapsed = false
+    /// 目录懒加载：下一页的页码（nil = 已到底）
+    @State private var nextPage: Int?
+    @State private var loadingMore = false
+    @State private var loadMoreFailed = false
     @GestureState private var dragDelta: CGFloat = 0
 
     private var source: (any BookSource)? { SourceRegistry.source(withId: book.sourceId) }
@@ -240,6 +244,8 @@ struct DetailView: View {
                     currentIndex: isCurrentBook ? player.index : nil,
                     onSelect: { index in
                         player.play(book: book, episodes: detail.episodes, startAt: index)
+                        // 起播不等待；剩余目录后台补齐（否则「下一集」会卡在第一页末尾）
+                        Task { await fillQueueInBackground() }
                     },
                     onCache: { index in
                         guard let src = source, detail.episodes.indices.contains(index) else { return }
@@ -258,7 +264,11 @@ struct DetailView: View {
                     },
                     onRemoveBookCache: {
                         CacheManager.shared.removeCache(for: detail.episodes)
-                    }
+                    },
+                    hasMore: nextPage != nil,
+                    loadingMore: loadingMore,
+                    loadMoreFailed: loadMoreFailed,
+                    onLoadMore: { Task { await loadMore() } }
                 )
             }
         }
@@ -277,15 +287,58 @@ struct DetailView: View {
         loading = true
         errorText = nil
         do {
-            // 必须带超时：没有它的话源站一挂住就永远停在「加载章节…」，
-            // 真机上表现为"点进去卡死"（这正是一个真实反馈）
-            detail = try await withTimeout(seconds: 25) { try await source.detail(for: book) }
+            // 首屏只拉**一页**目录（大长篇一页就几十集，够看）。
+            // 以前是一次拉完（2600 集 = 52 页）：既要等几十秒，又会因为高频请求被源站 429。
+            // 必须带超时：源站挂住时不能永远停在「加载章节…」（真机反馈过"点进去卡死"）。
+            let page = try await withTimeout(seconds: 25) {
+                try await source.episodePage(for: book, page: 1, pages: 1)
+            }
+            var loaded = page.detail
+            loaded.episodes = page.episodes
+            detail = loaded
+            nextPage = page.nextPage
         } catch {
             errorText = (error as? LocalizedError)?.errorDescription ?? "\(error)"
         }
         loading = false
         // 没有章节就把抽屉收起来：半屏空抽屉既没用又挡着内容，还容易被当成卡死
         if detail.episodes.isEmpty { drawerCollapsed = true }
+    }
+
+    /// 滑到章节列表底部时才拉下一页（「不滑动不加载」）
+    private func loadMore() async {
+        guard let source, let page = nextPage, !loadingMore else { return }
+        loadingMore = true
+        loadMoreFailed = false
+        defer { loadingMore = false }
+        do {
+            let next = try await withTimeout(seconds: 25) {
+                try await source.episodePage(for: book, page: page, pages: 1)
+            }
+            let known = Set(detail.episodes.map(\.url))
+            detail.episodes.append(contentsOf: next.episodes.filter { !known.contains($0.url) })
+            nextPage = next.nextPage
+        } catch {
+            // 失败就停在这一页，底部那行变成可点重试（自动重试会打转）
+            loadMoreFailed = true
+        }
+    }
+
+    /// 播放后**后台**把剩余目录拉齐塞进播放队列：
+    /// 不阻塞起播，又不会让「下一集」卡在第一页末尾。
+    private func fillQueueInBackground() async {
+        guard let source else { return }
+        var page = nextPage
+        while let p = page {
+            guard player.book?.bookURL == book.bookURL else { return }   // 用户换书了就停
+            guard let next = try? await source.episodePage(for: book, page: p, pages: 2) else { return }
+            let known = Set(detail.episodes.map(\.url))
+            let fresh = next.episodes.filter { !known.contains($0.url) }
+            detail.episodes.append(contentsOf: fresh)
+            player.appendEpisodes(fresh)
+            nextPage = next.nextPage
+            page = next.nextPage
+        }
     }
 }
 

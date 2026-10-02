@@ -46,6 +46,14 @@ struct EpisodeDrawer: View {
     let onCacheNext: (Int) -> Void
     /// 删除本书已缓存的音频（只删本地，不发请求）
     let onRemoveBookCache: () -> Void
+    /// 目录还有下一页（懒加载）
+    let hasMore: Bool
+    /// 正在拉下一页
+    let loadingMore: Bool
+    /// 上一次拉取失败（显示成可点的重试，避免自动重试打转）
+    let loadMoreFailed: Bool
+    /// 拉下一页：列表滑到底时自动触发（=「不滑动不加载」）
+    let onLoadMore: () -> Void
 
     @ObservedObject private var cache = CacheManager.shared
 
@@ -60,6 +68,7 @@ struct EpisodeDrawer: View {
                             row(index: index, episode: episode)
                                 .id(index)
                         }
+                        loadMoreRow
                     }
                 }
                 .onAppear {
@@ -68,6 +77,40 @@ struct EpisodeDrawer: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: 懒加载：滑到底才拉下一页（大长篇的目录页数很多，一次拉完会等几十秒还会被 429）
+
+    @ViewBuilder private var loadMoreRow: some View {
+        if hasMore || loadMoreFailed {
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                if loadingMore {
+                    ProgressView().scaleEffect(0.7)
+                    Text("加载更多…")
+                        .font(Theme.metaSmall)
+                        .foregroundColor(Theme.text2)
+                } else {
+                    Button(loadMoreFailed ? "加载失败，点这里重试" : "加载更多（已 \(episodes.count) 集）") {
+                        onLoadMore()
+                    }
+                    .font(Theme.metaSmall)
+                    .foregroundColor(loadMoreFailed ? Theme.danger : Theme.accent)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 16)
+            .onAppear {
+                // 滑到这里才自动加载；失败过后不自动重试（会打转），改为点按钮
+                if hasMore, !loadingMore, !loadMoreFailed { onLoadMore() }
+            }
+        } else if !episodes.isEmpty {
+            Text("已全部加载（\(episodes.count) 集）")
+                .font(Theme.metaSmall)
+                .foregroundColor(Theme.text2)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
         }
     }
 

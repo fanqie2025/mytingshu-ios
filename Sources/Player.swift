@@ -96,6 +96,17 @@ final class PlayerEngine: ObservableObject {
         Task { await load(autoPlay: autoPlay) }
     }
 
+    /// 追加「懒加载」进来的章节：详情页首屏只加载一页，剩下的由后台拉齐后塞进播放队列。
+    /// 只对同一本书生效、按 url 去重；**不动 `index`**，所以不影响正在播的那一集。
+    func appendEpisodes(_ more: [Episode]) {
+        guard book != nil, !more.isEmpty else { return }
+        var list = episodes
+        for e in more where !list.contains(where: { $0.url == e.url }) {
+            list.append(e)
+        }
+        if list.count != episodes.count { episodes = list }
+    }
+
     private func load(autoPlay: Bool) async {
         guard let book, let ep = currentEpisode, let src = sourceForCurrent else { return }
         isLoading = true

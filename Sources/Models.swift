@@ -27,6 +27,17 @@ struct BookDetail {
     var cover: String = ""
 }
 
+/// 一页目录（懒加载用）。
+/// 大长篇的源（13听书网这类 50 集/页、2600 集 = 52 页）一次拉全既要等几十秒，
+/// 又会因为高频请求被源站 429 —— 所以改成「滑到底再拉下一页」。
+struct EpisodePage {
+    var episodes: [Episode] = []
+    /// 只有第一页带书籍元信息（简介 / 封面 / 播音）
+    var detail: BookDetail = BookDetail()
+    /// 下一页的页码（1-based）；nil = 没有更多了
+    var nextPage: Int?
+}
+
 struct SourceCategory: Identifiable, Hashable {
     var id: String { url }
     let title: String
@@ -58,6 +69,9 @@ protocol BookSource: AnyObject, Identifiable {
     func menus() async throws -> [CategoryMenu]
     func books(in category: SourceCategory, page: Int) async throws -> [Book]
     func detail(for book: Book) async throws -> BookDetail
+    /// 增量拉目录：从第 `page` 页（1-based）开始最多拉 `pages` 页。
+    /// 默认实现退化成一次性 `detail(for:)`（Audiobookshelf 这类一次给全的源不用改）。
+    func episodePage(for book: Book, page: Int, pages: Int) async throws -> EpisodePage
     func audioURL(for episode: Episode) async throws -> URL
 
     /// 播放这个源的音频时需要的额外请求头（不少站的 CDN 有 Referer 防盗链）
@@ -74,6 +88,12 @@ extension BookSource {
     var desc: String { "" }
     func menus() async throws -> [CategoryMenu] { [] }
     func books(in category: SourceCategory, page: Int) async throws -> [Book] { [] }
+    /// 默认：只有第一页有内容、一次给全（`nextPage = nil`）
+    func episodePage(for book: Book, page: Int, pages: Int) async throws -> EpisodePage {
+        guard page <= 1 else { return EpisodePage() }
+        let detail = try await self.detail(for: book)
+        return EpisodePage(episodes: detail.episodes, detail: detail, nextPage: nil)
+    }
     func audioHeaders(for episode: Episode) -> [String: String] { [:] }
     func verificationURL(keyword: String) -> URL? { nil }
 }

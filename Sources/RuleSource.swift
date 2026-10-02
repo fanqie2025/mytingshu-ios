@@ -411,8 +411,27 @@ final class RuleSource: BookSource {
                                    author: nil, intro: nil, encoding: d.encoding)
     }
 
+    /// 兼容入口：**仍然拉全**。历史续播要按 episodeIndex 取集（`UI.swift` 的 HistoryView），
+    /// 只给一两页会让「续播第 700 集」错位。详情页 UI 走下面的 `episodePage` 做懒加载。
     func detail(for book: Book) async throws -> BookDetail {
-        guard let d = rule.detail else { return BookDetail() }
+        let maxPage = rule.detail?.pages?.max ?? 60
+        let page = try await loadDetail(book: book, window: 1...maxPage)
+        var out = page.detail
+        out.episodes = page.episodes
+        return out
+    }
+
+    /// 懒加载目录：从第 `page` 页（1-based）开始最多 `pages` 页。
+    /// 「不滑动不加载」就靠它：详情页首屏只要 1 页，用户滑到底才要下一页。
+    func episodePage(for book: Book, page: Int, pages: Int) async throws -> EpisodePage {
+        let start = max(1, page)
+        let window = start...(start + max(1, pages) - 1)
+        return try await loadDetail(book: book, window: window)
+    }
+
+    /// 真正干活：详情页 +（可翻页的）目录页；`window` 决定本次只拉哪些目录页
+    private func loadDetail(book: Book, window: ClosedRange<Int>) async throws -> EpisodePage {
+        guard let d = rule.detail else { return EpisodePage() }
         let gbk = (d.encoding ?? rule.encoding ?? "utf-8").lowercased().contains("gb")
         let desktop = (d.ua ?? rule.ua ?? "mobile").lowercased() == "desktop"
 
@@ -465,12 +484,21 @@ final class RuleSource: BookSource {
             if let r = d.cover { out.cover = anyString(anyValue(at: r, in: root) ?? "").absoluteURL(base: base) }
             if out.cover.isEmpty { out.cover = book.cover }
             if out.intro.isEmpty { out.intro = book.intro }
-            return out
+            // 接口模式一次给全，没有下一页
+            return EpisodePage(episodes: episodes, detail: out, nextPage: nil)
         }
 
         let doc = HTMLParser.parse(html)
 
-        var episodes: [Episode] = []
+        // 元信息：只有第一页需要（后续页是同一个详情页，白抓一次没必要）
+        if window.lowerBound <= 1 {
+            if let r = d.intro { out.intro = RuleExtractor.value(r, in: [doc]) }
+            if let r = d.cover { out.cover = RuleExtractor.value(r, in: [doc]).absoluteURL(base: base) }
+            if let r = d.artist { out.artist = RuleExtractor.value(r, in: [doc]) }
+            if let r = d.author { out.author = RuleExtractor.value(r, in: [doc]) }
+            if out.cover.isEmpty { out.cover = book.cover }
+            if out.intro.isEmpty { out.intro = book.intro }
+        }
 
         // 目录入口：声明了 dirUrl 就在详情页上找那个链接
         var dirPath = ""
@@ -478,48 +506,10 @@ final class RuleSource: BookSource {
             dirPath = RuleExtractor.value(dirRule, in: [doc])
         }
 
-        if !dirPath.isEmpty {
-            // 两步：详情页 → 目录页（PTCMS 这类站点，目录页还要桌面 UA）
-            let dirURL = dirPath.absoluteURL(base: base)
-            let dirDesktop = (d.dirUA ?? d.ua ?? rule.ua ?? "mobile").lowercased() == "desktop"
-            let maxPage = d.pages?.max ?? 60
-            var seen = Set<String>()
-            var pageNo = 1
-            while pageNo <= maxPage {
-                let u: String
-                if let tpl = d.pages?.url {
-                    u = fill(tpl, page: pageNo, extra: ["dir": dirURL])
-                } else if pageNo == 1 {
-                    u = dirURL
-                } else {
-                    u = dirURL + (dirURL.contains("?") ? "&" : "?") + "page=\(pageNo)"
-                }
-                // 目录翻页也限速（第一页不用等）：13听书网的目录连翻到第 11 页会 429，
-                // 大长篇的目录动辄几十页，不限速必然触发源站限流
-                if pageNo > 1 {
-                    try? await Task.sleep(nanoseconds: 700_000_000)
-                }
-                let pageHTML = try await fetch(u, gbk: gbk, desktop: dirDesktop)
-                let pdoc = HTMLParser.parse(pageHTML)
-                let nodes = HTMLNode.select(d.episodes, in: [pdoc])
-                var added = 0
-                for n in nodes {
-                    let t = RuleExtractor.value(d.episodeTitle ?? "@text", in: [n])
-                    var uu = RuleExtractor.value(d.episodeUrl ?? "@href", in: [n])
-                    if uu.isEmpty { uu = n.attr("href") ?? "" }
-                    guard !uu.isEmpty, !seen.contains(uu) else { continue }
-                    seen.insert(uu)
-                    episodes.append(Episode(title: t, url: uu.absoluteURL(base: base)))
-                    added += 1
-                }
-                if added == 0 { break }
-                if d.pages == nil && nodes.count < 50 { break }
-                pageNo += 1
-            }
-        } else {
+        guard !dirPath.isEmpty else {
             // 单页目录；或**声明了 dirUrl 但这一页没有目录入口**（有些书的详情页直接内联章节）
-            let nodes = HTMLNode.select(d.episodes, in: [doc])
-            for n in nodes {
+            var episodes: [Episode] = []
+            for n in HTMLNode.select(d.episodes, in: [doc]) {
                 let t = RuleExtractor.value(d.episodeTitle ?? "@text", in: [n])
                 var u = RuleExtractor.value(d.episodeUrl ?? "@href", in: [n])
                 if u.isEmpty { u = n.attr("href") ?? "" }
@@ -530,17 +520,58 @@ final class RuleSource: BookSource {
             if episodes.isEmpty, let dirRule = d.dirUrl, !dirRule.isEmpty {
                 throw SourceError.parse("详情页没找到目录入口")
             }
+            if episodes.isEmpty { throw SourceError.parse("没解析到章节") }
+            // 单页目录没有下一页
+            return EpisodePage(episodes: episodes, detail: out, nextPage: nil)
+        }
+
+        // 两步：详情页 → 目录页（PTCMS 这类站点，目录页还要桌面 UA）
+        let dirURL = dirPath.absoluteURL(base: base)
+        let dirDesktop = (d.dirUA ?? d.ua ?? rule.ua ?? "mobile").lowercased() == "desktop"
+        let maxPage = min(window.upperBound, d.pages?.max ?? 60)
+        var seen = Set<String>()
+        var episodes: [Episode] = []
+        var pageNo = window.lowerBound
+        var hasMore = false
+
+        while pageNo <= maxPage {
+            let u: String
+            if let tpl = d.pages?.url {
+                u = fill(tpl, page: pageNo, extra: ["dir": dirURL])
+            } else if pageNo == 1 {
+                u = dirURL
+            } else {
+                u = dirURL + (dirURL.contains("?") ? "&" : "?") + "page=\(pageNo)"
+            }
+            // 目录翻页也限速（第一页不用等）：13听书网的目录连翻到第 11 页会 429，
+            // 大长篇的目录动辄几十页，不限速必然触发源站限流
+            if pageNo > 1 {
+                try? await Task.sleep(nanoseconds: 700_000_000)
+            }
+            let pageHTML = try await fetch(u, gbk: gbk, desktop: dirDesktop)
+            let pdoc = HTMLParser.parse(pageHTML)
+            let nodes = HTMLNode.select(d.episodes, in: [pdoc])
+            var added = 0
+            for n in nodes {
+                let t = RuleExtractor.value(d.episodeTitle ?? "@text", in: [n])
+                var uu = RuleExtractor.value(d.episodeUrl ?? "@href", in: [n])
+                if uu.isEmpty { uu = n.attr("href") ?? "" }
+                guard !uu.isEmpty, !seen.contains(uu) else { continue }
+                seen.insert(uu)
+                episodes.append(Episode(title: t, url: uu.absoluteURL(base: base)))
+                added += 1
+            }
+            if added == 0 { hasMore = false; break }             // 这页没有新章节 → 到底了
+            hasMore = (d.pages != nil) || nodes.count >= 50      // 看着还有下一页
+            pageNo += 1
         }
 
         if episodes.isEmpty { throw SourceError.parse("没解析到章节") }
-        out.episodes = episodes
-        if let r = d.intro { out.intro = RuleExtractor.value(r, in: [doc]) }
-        if let r = d.cover { out.cover = RuleExtractor.value(r, in: [doc]).absoluteURL(base: base) }
-        if let r = d.artist { out.artist = RuleExtractor.value(r, in: [doc]) }
-        if let r = d.author { out.author = RuleExtractor.value(r, in: [doc]) }
-        if out.cover.isEmpty { out.cover = book.cover }
-        if out.intro.isEmpty { out.intro = book.intro }
-        return out
+        return EpisodePage(
+            episodes: episodes,
+            detail: out,
+            nextPage: hasMore ? pageNo : nil
+        )
     }
 
     func audioURL(for episode: Episode) async throws -> URL {
