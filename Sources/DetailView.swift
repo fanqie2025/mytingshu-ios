@@ -252,19 +252,6 @@ struct DetailView: View {
                         let episode = detail.episodes[index]
                         Task { await CacheManager.shared.cache(episode: episode, source: src) }
                     },
-                    // 限量限速（CacheManager 内部：10 集 / 5 秒±1），不在这里做"整本缓存"
-                    onCacheNext: { start in
-                        Task {
-                            await CacheManager.shared.cacheAll(
-                                book: book,
-                                episodes: detail.episodes,
-                                from: start
-                            )
-                        }
-                    },
-                    onRemoveBookCache: {
-                        CacheManager.shared.removeCache(for: detail.episodes)
-                    },
                     hasMore: nextPage != nil,
                     loadingMore: loadingMore,
                     loadMoreFailed: loadMoreFailed,

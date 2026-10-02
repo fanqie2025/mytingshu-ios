@@ -97,7 +97,7 @@ final class CacheManager: ObservableObject {
             objectWillChange.send()
             return true
         } catch {
-            // 静默失败：缓存只是锦上添花（批量时会统计进 batchFailed）
+            // 静默失败：缓存只是锦上添花（调用方拿返回值判断成败）
             return false
         }
     }
@@ -111,61 +111,8 @@ final class CacheManager: ObservableObject {
         }
     }
 
-    // MARK: - 批量缓存（**故意限量限速**）
-
-    /// 一次最多缓存几集。**不做成可调** —— 连续抓取会触发源站风控，
-    /// 这个数不是"性能参数"而是"别把源站惹毛"的保险丝。
-    static let batchLimit = 10
-    /// 每集之间等多久（秒）。实际会加 ±1 秒随机抖动，避免固定节奏被当爬虫。
-    static let batchIntervalSec: Double = 5
-
-    /// 批量缓存进度
-    @Published private(set) var batchDone: Int = 0
-    @Published private(set) var batchTotal: Int = 0
-    @Published private(set) var batchFailed: Int = 0
-    @Published private(set) var batching: Bool = false
-    private var batchCancelled = false
-
-    /// 停止正在跑的批量缓存
-    func cancelBatch() { batchCancelled = true }
-
-    /// 从第 `from` 集开始，**最多 `limit`（且不超过 `batchLimit`）集**缓存到本地。
-    /// 每集之间等 `batchIntervalSec` ±1 秒 —— 这条限速是刻意的，别顺手去掉。
-    func cacheAll(book: Book, episodes: [Episode], from index: Int = 0, limit: Int = CacheManager.batchLimit) async {
-        guard !batching, !episodes.isEmpty else { return }
-        guard let src = SourceStore.shared.all.first(where: { $0.id == book.sourceId }) else { return }
-
-        let start = min(max(0, index), episodes.count - 1)
-        let count = max(1, min(limit, CacheManager.batchLimit))
-        let slice = Array(episodes[start...].prefix(count))
-
-        batching = true
-        batchCancelled = false
-        batchTotal = slice.count
-        batchDone = 0
-        batchFailed = 0
-
-        for (i, ep) in slice.enumerated() {
-            if batchCancelled { break }
-            let ok = await cache(episode: ep, source: src)
-            if ok { batchDone += 1 } else { batchFailed += 1 }
-
-            // 限速：最后一集之后不用等
-            if i < slice.count - 1, !batchCancelled {
-                let seconds = max(1, CacheManager.batchIntervalSec + Double.random(in: -1...1))
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            }
-        }
-        batching = false
-    }
-
-    /// 删除这些集已下载的本地文件（只删本地，不产生任何网络请求）
-    func removeCache(for episodes: [Episode]) {
-        for ep in episodes {
-            let file = dir.appendingPathComponent(key(ep.url))
-            try? fm.removeItem(at: file)
-        }
-        refresh()
-        objectWillChange.send()
-    }
+    // 注：这里曾有「批量缓存」（cacheAll + 限量限速 + 取消 + 进度）与「删除本书缓存」，
+    // 已按用户要求移除 —— 连续拉多个音频最容易招源站风控。
+    // 保留的缓存能力：单集缓存 `cache(episode:source:)`（和"点开这一集播放"同量级）、
+    // 播放时预取 `prefetch`（0–3 集，默认关）、`clearAll()` 全清。
 }

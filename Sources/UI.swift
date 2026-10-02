@@ -423,49 +423,11 @@ struct EpisodeListSheet: View {
         return Array(player.episodes.indices)
     }
 
-    /// 从当前播放的那一集开始，批量缓存接下来的 N 集（限量限速在 CacheManager 里）
-    private func startBatchCache() {
-        guard let book = player.book, !player.episodes.isEmpty else { return }
-        let from = player.index
-        Task {
-            await CacheManager.shared.cacheAll(book: book, episodes: player.episodes, from: from)
-        }
-    }
-
     var body: some View {
         NavigationView {
             List {
-                // 批量缓存：限量限速（CacheManager 内：10 集 / 5 秒±1）。
-                // 缓存设置的**唯一入口**在「我的 → 缓存管理」，这里只放跟"当前这本书"有关的动作。
-                Section {
-                    if cache.batching {
-                        HStack(spacing: 10) {
-                            ProgressView().scaleEffect(0.8)
-                            Text("缓存中 \(cache.batchDone)/\(cache.batchTotal)")
-                            Spacer()
-                            Button("停止") { cache.cancelBatch() }
-                        }
-                    } else {
-                        Button {
-                            startBatchCache()
-                        } label: {
-                            Label("缓存接下来 \(CacheManager.batchLimit) 集", systemImage: "arrow.down.circle")
-                        }
-                        .disabled(player.episodes.isEmpty)
-
-                        Button("删除本书缓存", role: .destructive) {
-                            cache.removeCache(for: player.episodes)
-                        }
-                        .disabled(player.episodes.isEmpty || cache.cachedKeys.isEmpty)
-                    }
-                    if !cache.batching, cache.batchTotal > 0, cache.batchDone + cache.batchFailed > 0 {
-                        Text("上次批量：成功 \(cache.batchDone) 集，失败 \(cache.batchFailed) 集")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                } header: {
-                    Text("缓存")
-                }
+                // 注：这里曾有「缓存接下来 10 集」批量下载与「删除本书缓存」，已按用户要求移除 ——
+                // 连续拉多个音频最容易招源站风控。选集列表里每行的 ↓（单集缓存）保留。
 
                 // 选集：每 20 集一个格子，点一下只看这一段
                 if chunks.count > 1 {

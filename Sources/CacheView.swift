@@ -1,11 +1,13 @@
 import SwiftUI
 
-// MARK: - 缓存管理页（设计：Bounded 第二版，2026-10-02）
+// MARK: - 缓存管理页（设计：Bounded 第二版，2026-10-02；2026-10-02 收敛）
 //
 // 之前缓存设置埋在「我的 → 源管理与设置」里还要滚动才能看到；这页把这件事单独拿出来。
-// 关键约束（写在这里也写在界面上，不藏在代码里）：
-//   批量缓存**一次最多 10 集、每集约 5 秒**（±1 秒抖动）—— 连续抓取会触发源站风控。
-//   `CacheManager.batchLimit` / `batchIntervalSec` 是保险丝，不是性能参数。
+// 这页只做三件事：看占用 / 开关自动预取 / 清空。
+//
+// **不提供批量下载**（曾经的「缓存接下来 N 集」已按用户要求删除）：
+// 连续、快速地抓多个音频会被源站判定为爬虫并触发风控。只保留单集缓存，
+// 它和「点开这一集播放」是同一个请求量级。
 
 struct CacheView: View {
     @ObservedObject private var cache = CacheManager.shared
@@ -117,21 +119,17 @@ struct CacheView: View {
         .background(cardBackground)
     }
 
-    // MARK: 批量缓存的规则（刻意不可调）
+    // MARK: 为什么不提供批量下载（说明，防止以后又被加回来）
 
     private var ruleCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("批量缓存的限制", systemImage: "exclamationmark.triangle")
+            Label("为什么没有「批量缓存」", systemImage: "exclamationmark.triangle")
                 .font(Theme.meta)
                 .foregroundColor(Theme.gold)
 
-            Text("一次最多 \(CacheManager.batchLimit) 集，每集之间等 \(Int(CacheManager.batchIntervalSec)) 秒左右（带随机抖动）。")
+            Text("连续、快速地抓多个音频会被源站判定为爬虫并触发风控（限流、换 UA、甚至封 IP）。所以这里**只提供单集缓存**（章节列表里每行的 ↓，和「点开这一集播放」是同一个请求量级），不做「接下来 N 集」「整本缓存」这类批量下载。")
                 .font(Theme.metaSmall)
                 .foregroundColor(Theme.text1)
-
-            Text("这条限制是故意的：连续、快速地抓音频会被源站判定为爬虫并触发风控（限流、换 UA、甚至封 IP）。所以批量缓存只给「接下来 N 集」，不做整本缓存，也不提供调快的开关。")
-                .font(Theme.metaSmall)
-                .foregroundColor(Theme.text2)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -152,7 +150,7 @@ struct CacheView: View {
             .buttonStyle(.plain)
             .disabled(cache.cachedKeys.isEmpty)
 
-            Text("只删本地音频文件；要只删某一本书的缓存，去那本书的章节列表里点「删除本书缓存」。")
+            Text("只删本地音频文件，不会向源站发任何请求。")
                 .font(Theme.metaSmall)
                 .foregroundColor(Theme.text2)
         }

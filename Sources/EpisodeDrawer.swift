@@ -42,10 +42,6 @@ struct EpisodeDrawer: View {
     let currentIndex: Int?
     let onSelect: (Int) -> Void
     let onCache: (Int) -> Void
-    /// 批量缓存「从这一集开始的 N 集」——组件只出界面，真正调 CacheManager 的是 DetailView
-    let onCacheNext: (Int) -> Void
-    /// 删除本书已缓存的音频（只删本地，不发请求）
-    let onRemoveBookCache: () -> Void
     /// 目录还有下一页（懒加载）
     let hasMore: Bool
     /// 正在拉下一页
@@ -58,9 +54,10 @@ struct EpisodeDrawer: View {
     @ObservedObject private var cache = CacheManager.shared
 
     var body: some View {
+        // 注：这里曾有「缓存接下来 10 集」批量下载按钮，已按用户要求移除 ——
+        // 连续拉多个音频最容易招源站风控。单集下载（每行那个 ↓）保留：
+        // 它和"点开这一集播放"是同一个请求量级，不额外增加风险。
         VStack(spacing: 0) {
-            batchRow
-
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -114,41 +111,7 @@ struct EpisodeDrawer: View {
         }
     }
 
-    // MARK: 批量缓存（限量限速，见 CacheManager.batchLimit / batchIntervalSec）
-
-    private var batchRow: some View {
-        HStack(spacing: 10) {
-            if cache.batching {
-                ProgressView().scaleEffect(0.7)
-                Text("缓存中 \(cache.batchDone)/\(cache.batchTotal)")
-                    .font(Theme.metaSmall)
-                    .foregroundColor(Theme.text1)
-                Spacer(minLength: 8)
-                Button("停止") { cache.cancelBatch() }
-                    .font(Theme.metaSmall)
-                    .foregroundColor(Theme.accent)
-            } else {
-                Button {
-                    onCacheNext(currentIndex ?? 0)
-                } label: {
-                    Label("缓存接下来 \(CacheManager.batchLimit) 集", systemImage: "arrow.down.circle")
-                        .font(Theme.metaSmall)
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(Theme.accent)
-                .disabled(episodes.isEmpty)
-
-                Spacer(minLength: 8)
-
-                Button("删除本书缓存") { onRemoveBookCache() }
-                    .font(Theme.metaSmall)
-                    .foregroundColor(Theme.text2)
-                    .disabled(episodes.isEmpty)
-            }
-        }
-        .padding(.horizontal, Theme.Space.page)
-        .padding(.bottom, 8)
-    }
+    // MARK: 单集行（每行的 ↓ 是单集缓存，保留；批量缓存已移除）
 
     private func row(index: Int, episode: Episode) -> some View {
         HStack(spacing: 10) {
