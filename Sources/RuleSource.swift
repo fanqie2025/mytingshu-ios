@@ -231,16 +231,28 @@ final class RuleSource: BookSource {
         var text = try await once()
         // 任何页面都可能撞上「反转 + base64」型 JS Cookie 守卫 —— 规则源也自动解开重放
         var left = 2
+        var guardHits = 0
+        var guardCookies = 0
         while left > 0, text.contains("var reversed") {
+            guardHits += 1
             let cookies = HTTPClient.solveGuardCookies(text)
             if cookies.isEmpty { break }
+            guardCookies += cookies.count
             HTTPClient.applyGuardCookies(cookies, host: rule.host)
             text = try await once()
             left -= 1
         }
-        // 守卫没解开、状态又不是 200 → 抛出真实状态码，保住可诊断的错误信息
+        // 守卫没解开、状态又不是 200 → 抛出真实状态码 + 守卫线索（诊断页会显示，便于定位到底卡在哪）
         if lastStatus != 200, !text.contains("var reversed") {
-            throw SourceError.http(lastStatus, url)
+            let hint: String
+            if guardHits == 0 {
+                hint = "（该页没返回 JS 挑战页）"
+            } else if guardCookies == 0 {
+                hint = "（返回了 JS 挑战页，但一个 cookie 都没解出来）"
+            } else {
+                hint = "（返回过 JS 挑战页，解出 \(guardCookies) 个 cookie 后重放仍被拒）"
+            }
+            throw SourceError.message("HTTP \(lastStatus)\(hint)：\(url)")
         }
         return text
     }
