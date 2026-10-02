@@ -2,7 +2,8 @@ name: build-ios-ipa
 
 # 云端 macOS 编译 → 未签名 IPA（巨魔 TrollStore 直接安装）
 # 注意：本仓库只是 App 外壳，不含任何书源；书源在 App 内「设置 → 导入书源」在线订阅导入。
-# feat/** 分支只做「编译 + 产物自检 + 传 artifact」，**不发 Release**（手机上安装的 latest 只由 main 更新）。
+# feat/** 分支只做「编译 + 产物自检」，**不发 Release、也不留 artifact**
+# （手机上安装的 latest 只由 main 更新；要装机就合到 main）
 on:
   push:
     branches: [ main, master, 'feat/**' ]
@@ -35,14 +36,8 @@ jobs:
           test -f ipa_check/Payload/MyTingShu.app/Info.plist || { echo "缺 Info.plist"; exit 1; }
           echo "产物自检通过"
 
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: MyTingShu-ipa
-          path: build/MyTingShu.ipa
-          if-no-files-found: error
-
-      # 只有 main 才发布：特性分支（feat/**）的构建只作为开发验证的 artifact
+      # 不再 upload-artifact：同一个 IPA 以前既传 artifact 又发 Release，artifact 那份没人下。
+      # 特性分支只要"编译能过"这个信号即可；要装机就合到 main 走 Release（手机上直接下）。
       - name: 发到 Release（仅 main，手机可直接下载）
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
