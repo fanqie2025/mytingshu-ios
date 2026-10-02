@@ -299,6 +299,16 @@ extension Optional where Wrapped == String {
     var orEmpty: String { self ?? "" }
 }
 
+/// 把**规则源的重活丢出主线程**。
+///
+/// 为什么必须这么做：源方法内部是「抓页面 → MiniHTML 解析 → 一堆正则提取」，
+/// 这些是**纯 CPU 且可能很慢**（大目录页尤其）。如果从 MainActor 直接 await 它，
+/// 那些解析就跑在主线程上 —— 真机表现是：**转圈时返回键按不动，20 秒后被 iOS 看门狗杀掉**（假死退出）。
+/// 搜索/发现页因为写在 `withTaskGroup` 的子任务里，本来就不在主线程，所以不受影响。
+func offMain<T>(_ work: @escaping () async throws -> T) async throws -> T {
+    try await Task.detached(priority: .userInitiated) { try await work() }.value
+}
+
 /// 给任意 async 操作套一个超时（避免某个源卡住拖垮整体）
 func withTimeout<T>(seconds: Double, operation: @escaping () async throws -> T) async throws -> T {
     try await withThrowingTaskGroup(of: T.self) { group in

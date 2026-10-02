@@ -29,7 +29,7 @@ struct PlayerScreen: View {
                 if player.isLoading {
                     HStack(spacing: 8) {
                         ProgressView().scaleEffect(0.8).tint(Theme.accent)
-                        Text("正在获取音频地址…")
+                        Text("正在准备音频…")
                             .font(Theme.metaSmall)
                             .foregroundColor(Theme.text2)
                     }

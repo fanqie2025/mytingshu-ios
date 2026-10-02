@@ -84,7 +84,7 @@ struct CategoryGridView: View {
         errorText = nil
         do {
             let list = try await withTimeout(seconds: 20) {
-                try await source.books(in: category, page: page)
+                try await offMain { try await source.books(in: category, page: page) }
             }
             let fresh = list.filter { candidate in
                 !books.contains(where: { $0.bookURL == candidate.bookURL })

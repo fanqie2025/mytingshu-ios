@@ -58,17 +58,17 @@ final class Diagnostics: ObservableObject {
             var log = ""
             do {
                 let books = try await withTimeout(seconds: 25) {
-                    try await s.search(keyword: self.keyword, page: 1)
+                    try await offMain { try await s.search(keyword: self.keyword, page: 1) }
                 }
                 log += "搜索 \(books.count) 条"
                 guard let b = books.first else {
                     rows[i].ok = false; rows[i].detail = log + "（没结果，后面的步骤跳过）"
                     rows[i].ms = Int(Date().timeIntervalSince(t0) * 1000); continue
                 }
-                let d = try await withTimeout(seconds: 45) { try await s.detail(for: b) }
+                let d = try await withTimeout(seconds: 45) { try await offMain { try await s.detail(for: b) } }
                 log += " · 章节 \(d.episodes.count) 集"
                 guard let ep = d.episodes.first else { throw SourceError.parse("章节为空") }
-                let audio = try await withTimeout(seconds: 30) { try await s.audioURL(for: ep) }
+                let audio = try await withTimeout(seconds: 30) { try await offMain { try await s.audioURL(for: ep) } }
                 log += " · 取到音频地址"
                 let referer = s.audioHeaders(for: ep)["Referer"]
                 let (playable, info) = await HTTPClient.isPlayableAudio(audio.absoluteString, referer: referer)

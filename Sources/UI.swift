@@ -139,7 +139,7 @@ struct HistoryView: View {
                     Button {
                         Task {
                             guard let src = SourceRegistry.source(withId: h.book.sourceId) else { return }
-                            if let d = try? await src.detail(for: h.book) {
+                            if let d = try? await offMain({ try await src.detail(for: h.book) }) {
                                 PlayerEngine.shared.play(book: h.book, episodes: d.episodes, startAt: h.episodeIndex)
                             }
                         }

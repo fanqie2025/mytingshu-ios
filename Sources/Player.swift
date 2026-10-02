@@ -112,26 +112,33 @@ final class PlayerEngine: ObservableObject {
         isLoading = true
         errorText = nil
         do {
-            // 已经缓存过就直接放本地文件（离线也能听、不受直链过期影响）
+            // 已经缓存过（旧版本留下的）就直接放本地文件
             let localURL = CacheManager.shared.localURL(for: ep.url)
             let url: URL
             if let localURL {
                 url = localURL
             } else {
-                // 解析音频地址必须带超时：源站那一跳（播放页/接口）卡住时，
-                // 没有超时就会永远 await —— 界面上表现为"点进去没有声音"，且不报错
-                url = try await withTimeout(seconds: 30) { try await src.audioURL(for: ep) }
+                // 解析音频地址必须带超时（源站那一跳卡住时，没超时就会永远 await，
+                // 界面表现为"点进去没声音"且不报错）；也必须 offMain，否则页面解析会冻住主线程。
+                let remote = try await withTimeout(seconds: 30) {
+                    try await offMain { try await src.audioURL(for: ep) }
+                }
+                let headers = src.audioHeaders(for: ep)
+                if headers.isEmpty {
+                    url = remote
+                } else {
+                    // 带请求头的 CDN 不能用 AVURLAssetHTTPHeaderFieldsKey —— 那是**私有键，iOS 会忽略**。
+                    // 实测有听网的 CDN 不带 Referer 直接回 HTTP 400，于是 AVPlayer 静默失败。
+                    // 改成先用 URLSession（带头）取到临时文件再本地播：**请求不比在线播多**（一次 GET 拿整段），
+                    // 而且换集就删、不进「缓存管理」的占用（它不是缓存，是播放中转）。
+                    url = try await withTimeout(seconds: 180) {
+                        try await PlaybackTemp.fetch(remote, headers: headers)
+                    }
+                }
             }
             configureAudioSession()
-            // 有些源站的音频 CDN 有 Referer 防盗链，必须通过 AVURLAssetHTTPHeaderFieldsKey 带上
-            let headers = src.audioHeaders(for: ep)
-            var item: AVPlayerItem
-            if headers.isEmpty {
-                item = AVPlayerItem(url: url)
-            } else {
-                let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-                item = AVPlayerItem(asset: asset)
-            }
+            let item = AVPlayerItem(url: url)
+            observeItemFailures(item)
             if player == nil {
                 player = AVPlayer(playerItem: item)
                 player?.automaticallyWaitsToMinimizeStalling = true
@@ -237,6 +244,30 @@ final class PlayerEngine: ObservableObject {
         try? s.setActive(true)
     }
 
+    /// AVPlayerItem 的失败通知句柄（换集时先撤掉旧的）
+    private var itemObservers: [NSObjectProtocol] = []
+
+    /// 把 AVPlayer 的**播放失败显示出来**。
+    /// 以前这里什么都没有：带 Referer 防盗链的源明明取到了地址，却被 CDN 拒（HTTP 400），
+    /// AVPlayer 静默失败 —— 用户看到的就是「没声音、没进度条、也没任何提示」。
+    private func observeItemFailures(_ item: AVPlayerItem) {
+        for token in itemObservers { NotificationCenter.default.removeObserver(token) }
+        itemObservers = []
+        let names: [Notification.Name] = [.AVPlayerItemFailedToPlayToEndTime, .AVPlayerItemNewErrorLogEntry]
+        for name in names {
+            let token = NotificationCenter.default.addObserver(forName: name, object: item, queue: .main) { [weak self] note in
+                guard let self else { return }
+                let err = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+                let why = err?.localizedDescription ?? item.error?.localizedDescription ?? "未知原因"
+                Task { @MainActor in
+                    self.errorText = "播放失败：\(why)"
+                    self.isPlaying = false
+                }
+            }
+            itemObservers.append(token)
+        }
+    }
+
     private func addObservers() {
         guard let player else { return }
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 600), queue: .main) { [weak self] t in
@@ -307,6 +338,51 @@ final class PlayerEngine: ObservableObject {
         ]
         if duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = duration }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+}
+
+// MARK: - 播放中转文件（**不是缓存**）
+
+/// 给「CDN 强制要请求头」的音频用（例如有听网：不带 `Referer` 直接 HTTP 400）。
+///
+/// 为什么不直接用 AVPlayer 流式播：给 AVPlayer 带自定义请求头只能靠
+/// `AVURLAssetHTTPHeaderFieldsKey`，那是**私有键、iOS 会忽略**，于是 CDN 拒播且静默失败。
+///
+/// 这不是「缓存」：
+///   · 每换一集就清掉上一集的临时文件，磁盘占用只有当前这一集；
+///   · **请求量不比在线播多** —— 一次 GET 拿整段，比 AVPlayer 流式可能发多次 range 请求还少；
+///   · 不进「我的 → 缓存管理」的占用，也不参与离线播放（换集即删）。
+enum PlaybackTemp {
+    private static var dir: URL {
+        let d = FileManager.default.temporaryDirectory.appendingPathComponent("play_tmp", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: d.path) {
+            try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        }
+        return d
+    }
+
+    static func clear() {
+        let fm = FileManager.default
+        for f in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] {
+            try? fm.removeItem(at: f)
+        }
+    }
+
+    /// 带请求头取一集到临时文件；每次调用先清掉旧文件（只留当前这一集）
+    static func fetch(_ remote: URL, headers: [String: String]) async throws -> URL {
+        clear()
+        var req = URLRequest(remote)
+        req.setValue(HTTPClient.mobileUA, forHTTPHeaderField: "User-Agent")
+        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        let (tmp, resp) = try await URLSession.shared.download(for: req)
+        if let http = resp as? HTTPURLResponse, !(http.statusCode == 200 || http.statusCode == 206) {
+            throw SourceError.http(http.statusCode, remote.absoluteString)
+        }
+        let ext = remote.pathExtension.isEmpty ? "audio" : remote.pathExtension
+        let dest = dir.appendingPathComponent("now." + ext)
+        try? FileManager.default.removeItem(at: dest)
+        try FileManager.default.moveItem(at: tmp, to: dest)
+        return dest
     }
 }
 

@@ -273,7 +273,7 @@ struct DetailView: View {
             // 以前是一次拉完（2600 集 = 52 页）：既要等几十秒，又会因为高频请求被源站 429。
             // 必须带超时：源站挂住时不能永远停在「加载章节…」（真机反馈过"点进去卡死"）。
             let page = try await withTimeout(seconds: 25) {
-                try await source.episodePage(for: book, page: 1, pages: 1)
+                try await offMain { try await source.episodePage(for: book, page: 1, pages: 1) }
             }
             var loaded = page.detail
             loaded.episodes = page.episodes
@@ -295,7 +295,7 @@ struct DetailView: View {
         defer { loadingMore = false }
         do {
             let next = try await withTimeout(seconds: 25) {
-                try await source.episodePage(for: book, page: page, pages: 1)
+                try await offMain { try await source.episodePage(for: book, page: page, pages: 1) }
             }
             let known = Set(detail.episodes.map(\.url))
             detail.episodes.append(contentsOf: next.episodes.filter { !known.contains($0.url) })
@@ -313,7 +313,7 @@ struct DetailView: View {
         var page = nextPage
         while let p = page {
             guard player.book?.bookURL == book.bookURL else { return }   // 用户换书了就停
-            guard let next = try? await source.episodePage(for: book, page: p, pages: 2) else { return }
+            guard let next = try? await offMain({ try await source.episodePage(for: book, page: p, pages: 2) }) else { return }
             let known = Set(detail.episodes.map(\.url))
             let fresh = next.episodes.filter { !known.contains($0.url) }
             detail.episodes.append(contentsOf: fresh)
