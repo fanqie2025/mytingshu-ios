@@ -472,11 +472,15 @@ final class RuleSource: BookSource {
 
         var episodes: [Episode] = []
 
+        // 目录入口：声明了 dirUrl 就在详情页上找那个链接
+        var dirPath = ""
         if let dirRule = d.dirUrl, !dirRule.isEmpty {
+            dirPath = RuleExtractor.value(dirRule, in: [doc])
+        }
+
+        if !dirPath.isEmpty {
             // 两步：详情页 → 目录页（PTCMS 这类站点，目录页还要桌面 UA）
-            let path = RuleExtractor.value(dirRule, in: [doc])
-            guard !path.isEmpty else { throw SourceError.parse("详情页没找到目录入口") }
-            let dirURL = path.absoluteURL(base: base)
+            let dirURL = dirPath.absoluteURL(base: base)
             let dirDesktop = (d.dirUA ?? d.ua ?? rule.ua ?? "mobile").lowercased() == "desktop"
             let maxPage = d.pages?.max ?? 60
             var seen = Set<String>()
@@ -489,6 +493,11 @@ final class RuleSource: BookSource {
                     u = dirURL
                 } else {
                     u = dirURL + (dirURL.contains("?") ? "&" : "?") + "page=\(pageNo)"
+                }
+                // 目录翻页也限速（第一页不用等）：13听书网的目录连翻到第 11 页会 429，
+                // 大长篇的目录动辄几十页，不限速必然触发源站限流
+                if pageNo > 1 {
+                    try? await Task.sleep(nanoseconds: 700_000_000)
                 }
                 let pageHTML = try await fetch(u, gbk: gbk, desktop: dirDesktop)
                 let pdoc = HTMLParser.parse(pageHTML)
@@ -508,6 +517,7 @@ final class RuleSource: BookSource {
                 pageNo += 1
             }
         } else {
+            // 单页目录；或**声明了 dirUrl 但这一页没有目录入口**（有些书的详情页直接内联章节）
             let nodes = HTMLNode.select(d.episodes, in: [doc])
             for n in nodes {
                 let t = RuleExtractor.value(d.episodeTitle ?? "@text", in: [n])
@@ -515,6 +525,10 @@ final class RuleSource: BookSource {
                 if u.isEmpty { u = n.attr("href") ?? "" }
                 guard !u.isEmpty else { continue }
                 episodes.append(Episode(title: t, url: u.absoluteURL(base: base)))
+            }
+            // 兜底也没拿到章节，才报原来那句更精确的错（真机反馈：29听书网 三体 就卡在这）
+            if episodes.isEmpty, let dirRule = d.dirUrl, !dirRule.isEmpty {
+                throw SourceError.parse("详情页没找到目录入口")
             }
         }
 

@@ -24,6 +24,7 @@ struct DetailView: View {
     @State private var errorText: String?
     @State private var introExpanded = false
     @State private var drawerFraction: CGFloat = 0.46
+    @State private var drawerCollapsed = false
     @GestureState private var dragDelta: CGFloat = 0
 
     private var source: (any BookSource)? { SourceRegistry.source(withId: book.sourceId) }
@@ -178,22 +179,39 @@ struct DetailView: View {
 
     // MARK: 常驻章节抽屉
 
+    /// 常驻章节抽屉。**可以收起**（点右侧箭头，或往下拖）——
+    /// 之前它不能隐藏，章节加载失败时就变成半屏空白挡着内容，真机上被当成"卡死"。
     private func drawer(viewport: CGFloat) -> some View {
         let minHeight = viewport * 0.28
         let maxHeight = viewport * 0.88
         let base = viewport * drawerFraction
-        let height = min(max(base - dragDelta, minHeight), maxHeight)
+        let expandedHeight = min(max(base - dragDelta, minHeight), maxHeight)
+        let height = drawerCollapsed ? 62 : expandedHeight
 
         return VStack(spacing: 0) {
-            // 抓手 + 当前集（拖动这里可以改抽屉高度，列表自身仍可正常滚动）
+            // 抓手 + 当前集 + 收起/展开（拖动这里可以改抽屉高度，列表自身仍可正常滚动）
             VStack(spacing: 6) {
                 Capsule()
                     .fill(Theme.separator)
                     .frame(width: 40, height: 4)
-                EpisodeDrawerHeader(
-                    episodes: detail.episodes,
-                    currentIndex: isCurrentBook ? player.index : nil
-                )
+
+                HStack(spacing: 6) {
+                    EpisodeDrawerHeader(
+                        episodes: detail.episodes,
+                        currentIndex: isCurrentBook ? player.index : nil
+                    )
+
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { drawerCollapsed.toggle() }
+                    } label: {
+                        Image(systemName: drawerCollapsed ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(Theme.text2)
+                            .frame(width: 32, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, Theme.Space.row)
+                }
             }
             .padding(.top, 8)
             .padding(.bottom, 6)
@@ -206,35 +224,43 @@ struct DetailView: View {
                     }
                     .onEnded { value in
                         let projected = base - value.translation.height
-                        drawerFraction = min(max(projected / viewport, 0.28), 0.88)
+                        // 往下拖过阈值 = 收起；往上拖 = 展开并记住新高度
+                        if projected < viewport * 0.22 {
+                            withAnimation(.easeInOut(duration: 0.18)) { drawerCollapsed = true }
+                        } else {
+                            drawerCollapsed = false
+                            drawerFraction = min(max(projected / viewport, 0.28), 0.88)
+                        }
                     }
             )
 
-            EpisodeDrawer(
-                episodes: detail.episodes,
-                currentIndex: isCurrentBook ? player.index : nil,
-                onSelect: { index in
-                    player.play(book: book, episodes: detail.episodes, startAt: index)
-                },
-                onCache: { index in
-                    guard let src = source, detail.episodes.indices.contains(index) else { return }
-                    let episode = detail.episodes[index]
-                    Task { await CacheManager.shared.cache(episode: episode, source: src) }
-                },
-                // 限量限速（CacheManager 内部：10 集 / 5 秒±1），不在这里做"整本缓存"
-                onCacheNext: { start in
-                    Task {
-                        await CacheManager.shared.cacheAll(
-                            book: book,
-                            episodes: detail.episodes,
-                            from: start
-                        )
+            if !drawerCollapsed {
+                EpisodeDrawer(
+                    episodes: detail.episodes,
+                    currentIndex: isCurrentBook ? player.index : nil,
+                    onSelect: { index in
+                        player.play(book: book, episodes: detail.episodes, startAt: index)
+                    },
+                    onCache: { index in
+                        guard let src = source, detail.episodes.indices.contains(index) else { return }
+                        let episode = detail.episodes[index]
+                        Task { await CacheManager.shared.cache(episode: episode, source: src) }
+                    },
+                    // 限量限速（CacheManager 内部：10 集 / 5 秒±1），不在这里做"整本缓存"
+                    onCacheNext: { start in
+                        Task {
+                            await CacheManager.shared.cacheAll(
+                                book: book,
+                                episodes: detail.episodes,
+                                from: start
+                            )
+                        }
+                    },
+                    onRemoveBookCache: {
+                        CacheManager.shared.removeCache(for: detail.episodes)
                     }
-                },
-                onRemoveBookCache: {
-                    CacheManager.shared.removeCache(for: detail.episodes)
-                }
-            )
+                )
+            }
         }
         .frame(height: height)
         .background(TopRoundedShape(radius: Theme.Radius.card).fill(Theme.surface))
@@ -251,11 +277,15 @@ struct DetailView: View {
         loading = true
         errorText = nil
         do {
-            detail = try await source.detail(for: book)
+            // 必须带超时：没有它的话源站一挂住就永远停在「加载章节…」，
+            // 真机上表现为"点进去卡死"（这正是一个真实反馈）
+            detail = try await withTimeout(seconds: 25) { try await source.detail(for: book) }
         } catch {
             errorText = (error as? LocalizedError)?.errorDescription ?? "\(error)"
         }
         loading = false
+        // 没有章节就把抽屉收起来：半屏空抽屉既没用又挡着内容，还容易被当成卡死
+        if detail.episodes.isEmpty { drawerCollapsed = true }
     }
 }
 

@@ -38,19 +38,33 @@ enum HTTPClient {
                      referer: String? = nil,
                      mobile: Bool = true,
                      timeout: TimeInterval = 20) async throws -> (Data, HTTPURLResponse) {
-        // 网络层重试：恋听/22听 这类站 TLS 很不稳定，单次失败不是结论
+        // 重试分两类：
+        //   ① 网络层失败（TLS 抖动、超时）—— 恋听/22听 这类站单次失败不是结论
+        //   ② 服务端限流/瞬时故障（408/429/500/502/503/504）—— 真机反馈里 13听书网的目录
+        //      翻到第 11 页直接 429；不重试的话整本书的章节列表就废了（"能搜索、点了打不开"）
         var lastError: Error?
+        let retryableStatus: Set<Int> = [408, 425, 429, 500, 502, 503, 504]
         for attempt in 0..<3 {
             if attempt > 0 { try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_500_000_000) }
             do {
                 let req = try request(urlString, headers: headers, referer: referer, mobile: mobile, timeout: timeout)
                 let (data, resp) = try await session.data(for: req)
                 guard let http = resp as? HTTPURLResponse else { throw SourceError.message("无 HTTP 响应") }
+
+                if retryableStatus.contains(http.statusCode), attempt < 2 {
+                    lastError = SourceError.http(http.statusCode, urlString)
+                    // 限流要等得更久：429/503 给 3s、6s，其余给 1s、2s
+                    let throttled = (http.statusCode == 429 || http.statusCode == 503)
+                    let wait = Double(attempt + 1) * (throttled ? 3.0 : 1.0)
+                    try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                    continue
+                }
+
                 return (data, http)
             } catch let e as URLError {
                 lastError = SourceError.message("网络错误：\(e.localizedDescription)")
             } catch {
-                throw error        // HTTP 状态码一类的错误不重试，交给上层判断
+                throw error
             }
         }
         throw lastError ?? SourceError.message("网络请求失败")

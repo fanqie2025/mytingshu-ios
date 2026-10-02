@@ -157,6 +157,9 @@ struct SearchResultRow: View {
                 }
                 .font(Theme.metaSmall)
                 .foregroundColor(Theme.text1)
+                // 必须有 lineLimit：有些源的 author 字段会把整段简介塞进来（275听书 实测），
+                // 不限制的话一行结果会撑成十几行，列表看起来"行距巨大、不规范"
+                .lineLimit(1)
             }
         }
         .padding(.vertical, 6)
