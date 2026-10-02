@@ -57,10 +57,27 @@ final class Diagnostics: ObservableObject {
             let t0 = Date()
             var log = ""
             do {
-                let books = try await withTimeout(seconds: 25) {
-                    try await offMain { try await s.search(keyword: self.keyword, page: 1) }
+                let books: [Book]
+                if s.searchable {
+                    books = try await withTimeout(seconds: 25) {
+                        try await offMain { try await s.search(keyword: self.keyword, page: 1) }
+                    }
+                    log += "搜索 \(books.count) 条"
+                } else {
+                    // 不支持搜索的源（单田芳评书网）：深度测试改走**分类**。
+                    // 以前这里直接判红「搜索 0 条」，那是**仪器误报** —— 源本身是好的。
+                    let menus = try await withTimeout(seconds: 25) { try await offMain { try await s.menus() } }
+                    if let cat = menus.flatMap({ $0.categories }).first {
+                        let list = try await withTimeout(seconds: 25) {
+                            try await offMain { try await s.books(in: cat, page: 1) }
+                        }
+                        books = list
+                        log += "该源不支持搜索，改走分类「\(cat.title)」→ \(list.count) 条"
+                    } else {
+                        books = []
+                        log += "该源不支持搜索，且没取到分类"
+                    }
                 }
-                log += "搜索 \(books.count) 条"
                 guard let b = books.first else {
                     rows[i].ok = false; rows[i].detail = log + "（没结果，后面的步骤跳过）"
                     rows[i].ms = Int(Date().timeIntervalSince(t0) * 1000); continue

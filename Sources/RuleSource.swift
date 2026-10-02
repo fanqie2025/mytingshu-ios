@@ -209,16 +209,23 @@ final class RuleSource: BookSource {
         if headers["Referer"] == nil { headers["Referer"] = base }
         let useDesktop = desktop ?? ((rule.ua ?? "mobile").lowercased() == "desktop")
 
+        var lastStatus = 200
         func once() async throws -> String {
             // 按主机限速：13听书网 连续两次请求（搜索 → 详情）直接 429；
             // 实测同一 host 间隔 2 秒连续 5 次请求全部 200。这条限制对所有抓站源生效。
             await HostPacer.shared.wait(rule.host)
             if let form {
+                lastStatus = 200
                 return try await HTTPClient.postForm(url, body: form, headers: headers,
                                                      referer: base, mobile: !useDesktop)
             }
-            return try await HTTPClient.text(url, gbk: gbk, headers: headers,
-                                             referer: base, mobile: !useDesktop)
+            // 403/429/503 也可能是**挑战响应**（13听书网目录页就给 403），
+            // 所以放进来先让下面的守卫循环看正文，解不开再按 HTTP 错误抛。
+            let (body, status) = try await HTTPClient.textStatus(url, gbk: gbk, headers: headers,
+                                                                referer: base, mobile: !useDesktop,
+                                                                allowStatus: [200, 403, 429, 503])
+            lastStatus = status
+            return body
         }
 
         var text = try await once()
@@ -230,6 +237,10 @@ final class RuleSource: BookSource {
             HTTPClient.applyGuardCookies(cookies, host: rule.host)
             text = try await once()
             left -= 1
+        }
+        // 守卫没解开、状态又不是 200 → 抛出真实状态码，保住可诊断的错误信息
+        if lastStatus != 200, !text.contains("var reversed") {
+            throw SourceError.http(lastStatus, url)
         }
         return text
     }
@@ -806,7 +817,12 @@ final class RuleSource: BookSource {
     func audioHeaders(for episode: Episode) -> [String: String] {
         guard let a = rule.audio else { return [:] }
         var h = a.headers ?? [:]
-        if h["Referer"] == nil { h["Referer"] = a.referer ?? base }
+        if h["Referer"] == nil {
+            // ⚠️ referer 在规则里是**模板**（"{host}/"、"{episodeUrl}"），必须先 fill 再发。
+            // 曾经直接把模板串当 Referer 发出去 → 有听网的 CDN 回 HTTP 400
+            //（真机诊断那行「取到音频地址 · 试听失败 HTTP 400 application/xml」就是这么来的）。
+            h["Referer"] = fill(a.referer ?? base, extra: ["episodeUrl": episode.url])
+        }
         return h
     }
 

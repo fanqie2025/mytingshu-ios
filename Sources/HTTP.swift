@@ -84,6 +84,23 @@ enum HTTPClient {
         return decode(data, gbk: gbk)
     }
 
+    /// 与 `text` 相同，但把状态码一起返回。
+    /// 用途：有些站的「反转 + base64」JS Cookie 挑战**会带 403/429 这种状态码**回来，
+    /// 只看状态码就抛会永远解不开（13听书网的目录页就是这样）；
+    /// 也不能干脆把坏状态当正文吞掉，否则错误信息会变成"没解析到章节"。
+    static func textStatus(_ urlString: String,
+                           gbk: Bool = false,
+                           headers: [String: String] = [:],
+                           referer: String? = nil,
+                           mobile: Bool = true,
+                           allowStatus: Set<Int> = [200]) async throws -> (String, Int) {
+        let (data, http) = try await data(urlString, headers: headers, referer: referer, mobile: mobile)
+        if !allowStatus.contains(http.statusCode) {
+            throw SourceError.http(http.statusCode, urlString)
+        }
+        return (decode(data, gbk: gbk), http.statusCode)
+    }
+
     /// POST 表单（application/x-www-form-urlencoded），返回文本
     static func postForm(_ urlString: String,
                          body: String,
