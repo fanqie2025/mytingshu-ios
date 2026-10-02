@@ -303,7 +303,7 @@ struct DiscoverView: View {
         menusError = nil
         loadingMenus = true
         do {
-            let fetched = try await withTimeout(seconds: 20) { try await src.menus() }
+            let fetched = try await withTimeout(seconds: 20) { try await offMain { try await src.menus() } }
             guard gen == generation else { return }   // 期间又 reload 过 → 丢弃这一代
             menus = fetched
         } catch {
@@ -372,7 +372,7 @@ struct DiscoverView: View {
 
         do {
             let books = try await withTimeout(seconds: 20) {
-                try await src.books(in: category, page: 1)
+                try await offMain { try await src.books(in: category, page: 1) }
             }
             apply(books: books, sourceId: src.id, sectionId: sectionId, generation: gen)
         } catch {
