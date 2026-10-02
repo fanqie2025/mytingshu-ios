@@ -371,7 +371,7 @@ enum PlaybackTemp {
     /// 带请求头取一集到临时文件；每次调用先清掉旧文件（只留当前这一集）
     static func fetch(_ remote: URL, headers: [String: String]) async throws -> URL {
         clear()
-        var req = URLRequest(remote)
+        var req = URLRequest(url: remote)
         req.setValue(HTTPClient.mobileUA, forHTTPHeaderField: "User-Agent")
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
         let (tmp, resp) = try await URLSession.shared.download(for: req)
