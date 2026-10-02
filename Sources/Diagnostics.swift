@@ -31,7 +31,7 @@ final class Diagnostics: ObservableObject {
         for (i, s) in sources.enumerated() {
             let t0 = Date()
             do {
-                let books = try await offMain { try await s.search(keyword: keyword, page: 1) }
+                let books = try await offMain { try await s.search(keyword: self.keyword, page: 1) }
                 let ms = Int(Date().timeIntervalSince(t0) * 1000)
                 rows[i].ok = true
                 rows[i].ms = ms
