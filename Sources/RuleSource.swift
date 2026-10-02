@@ -135,6 +135,27 @@ struct SourceRule: Codable, Identifiable {
     }
 }
 
+// MARK: - 按主机限速
+
+/// 同一个 host 的两次请求之间至少隔 `minInterval` 秒。
+/// 起因：13听书网 在「搜索 → 详情」这种连续请求下必然 429（实测间隔 2 秒可稳定通过）。
+/// 只作用于**规则源**的页面请求；音频直链解析走 HTTPClient 不经这里，所以不影响起播速度。
+actor HostPacer {
+    static let shared = HostPacer()
+    private var last: [String: Date] = [:]
+
+    func wait(_ host: String, minInterval: TimeInterval = 2.0) async {
+        let now = Date()
+        if let prev = last[host] {
+            let gap = now.timeIntervalSince(prev)
+            if gap < minInterval {
+                try? await Task.sleep(nanoseconds: UInt64((minInterval - gap) * 1_000_000_000))
+            }
+        }
+        last[host] = Date()
+    }
+}
+
 // MARK: - 规则驱动的源
 
 final class RuleSource: BookSource {
@@ -189,6 +210,9 @@ final class RuleSource: BookSource {
         let useDesktop = desktop ?? ((rule.ua ?? "mobile").lowercased() == "desktop")
 
         func once() async throws -> String {
+            // 按主机限速：13听书网 连续两次请求（搜索 → 详情）直接 429；
+            // 实测同一 host 间隔 2 秒连续 5 次请求全部 200。这条限制对所有抓站源生效。
+            await HostPacer.shared.wait(rule.host)
             if let form {
                 return try await HTTPClient.postForm(url, body: form, headers: headers,
                                                      referer: base, mobile: !useDesktop)

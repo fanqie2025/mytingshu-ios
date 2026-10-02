@@ -20,6 +20,28 @@ struct SearchScreen: View {
     @State private var showErrors = false
     @State private var verifyTarget: VerifyTarget?
     @State private var path = NavigationPath()
+    /// 历史搜索（最多留 12 条，只存本机 UserDefaults）
+    @State private var history: [String] = []
+
+    private static let historyKey = "search_history_v1"
+
+    private func loadHistory() {
+        history = UserDefaults.standard.stringArray(forKey: Self.historyKey) ?? []
+    }
+
+    private func saveHistory() {
+        UserDefaults.standard.set(history, forKey: Self.historyKey)
+    }
+
+    /// 搜完记一笔：去重后插到最前，最多留 12 条
+    private func remember(_ kw: String) {
+        let trimmed = kw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var list = history.filter { $0 != trimmed }
+        list.insert(trimmed, at: 0)
+        history = Array(list.prefix(12))
+        saveHistory()
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -31,6 +53,7 @@ struct SearchScreen: View {
                 content
             }
             .background(Theme.bg)
+            .onAppear { loadHistory() }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Book.self) { book in
                 DetailView(book: book)
@@ -101,6 +124,8 @@ struct SearchScreen: View {
                 action: nil
             )
             .padding(.top, 60)
+        } else if keyword.isEmpty && !history.isEmpty {
+            historyList
         } else if results.isEmpty && errors.isEmpty {
             StateView(
                 kind: .empty,
@@ -131,6 +156,67 @@ struct SearchScreen: View {
                 .padding(.horizontal, Theme.Space.page)
                 .padding(.top, 12)
                 .padding(.bottom, 30)
+            }
+        }
+    }
+
+    /// 历史搜索：点一下直接搜，右侧 ✕ 删单条，右上「清空」全删
+    private var historyList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("历史搜索")
+                        .font(Theme.meta)
+                        .foregroundColor(Theme.text2)
+                    Spacer()
+                    Button("清空") {
+                        history = []
+                        saveHistory()
+                    }
+                    .font(Theme.metaSmall)
+                    .foregroundColor(Theme.accent)
+                }
+                .padding(.horizontal, Theme.Space.page)
+                .padding(.vertical, 12)
+
+                ForEach(history, id: \.self) { kw in
+                    HStack(spacing: 10) {
+                        Button {
+                            keyword = kw
+                            Task { await runSearch() }
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "clock.arrow.circlepath")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(Theme.text2)
+                                Text(kw)
+                                    .font(Theme.meta)
+                                    .foregroundColor(Theme.text1)
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            history.removeAll { $0 == kw }
+                            saveHistory()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 12))
+                                .foregroundColor(Theme.text2)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, Theme.Space.page)
+                    .padding(.vertical, 13)
+
+                    Rectangle()
+                        .fill(Theme.separator)
+                        .frame(height: 0.5)
+                        .padding(.leading, Theme.Space.page + 24)
+                }
             }
         }
     }
@@ -222,6 +308,7 @@ struct SearchScreen: View {
         }
 
         results.sort { $0.source.name < $1.source.name }
+        remember(kw)
         searching = false
     }
 }
