@@ -41,7 +41,6 @@ struct EpisodeDrawer: View {
     let episodes: [Episode]
     let currentIndex: Int?
     let onSelect: (Int) -> Void
-    let onCache: (Int) -> Void
     /// 目录还有下一页（懒加载）
     let hasMore: Bool
     /// 正在拉下一页
@@ -50,8 +49,6 @@ struct EpisodeDrawer: View {
     let loadMoreFailed: Bool
     /// 拉下一页：列表滑到底时自动触发（=「不滑动不加载」）
     let onLoadMore: () -> Void
-
-    @ObservedObject private var cache = CacheManager.shared
 
     var body: some View {
         // 注：这里曾有「缓存接下来 10 集」批量下载按钮，已按用户要求移除 ——
@@ -111,7 +108,9 @@ struct EpisodeDrawer: View {
         }
     }
 
-    // MARK: 单集行（每行的 ↓ 是单集缓存，保留；批量缓存已移除）
+    // MARK: 单集行（只有编号 + 标题，点一下播放）
+    // 单集 ↓ 缓存按钮已按用户要求移除（连同批量缓存、自动缓存）——
+    // App 现在**不产生任何下载**，只保留"能播之前缓存过的旧文件 + 能清空"。
 
     private func row(index: Int, episode: Episode) -> some View {
         HStack(spacing: 10) {
@@ -125,21 +124,6 @@ struct EpisodeDrawer: View {
                 .foregroundColor(index == currentIndex ? Theme.accent : Theme.text1)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
-
-            if cache.isCached(episode.url) {
-                Image(systemName: "arrow.down.circle.fill")
-                    .foregroundColor(Theme.success)
-            } else if cache.isDownloading(episode.url) {
-                ProgressView().scaleEffect(0.7)
-            } else {
-                Button {
-                    onCache(index)
-                } label: {
-                    Image(systemName: "arrow.down.circle")
-                        .foregroundColor(Theme.text2)
-                }
-                .buttonStyle(.plain)
-            }
         }
         .padding(.horizontal, Theme.Space.page)
         .padding(.vertical, 11)

@@ -247,11 +247,6 @@ struct DetailView: View {
                         // 起播不等待；剩余目录后台补齐（否则「下一集」会卡在第一页末尾）
                         Task { await fillQueueInBackground() }
                     },
-                    onCache: { index in
-                        guard let src = source, detail.episodes.indices.contains(index) else { return }
-                        let episode = detail.episodes[index]
-                        Task { await CacheManager.shared.cache(episode: episode, source: src) }
-                    },
                     hasMore: nextPage != nil,
                     loadingMore: loadingMore,
                     loadMoreFailed: loadMoreFailed,

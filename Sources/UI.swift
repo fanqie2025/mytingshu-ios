@@ -352,7 +352,6 @@ struct SettingsView: View {
 
 struct BookInfoSheet: View {
     @ObservedObject var player = PlayerEngine.shared
-    @ObservedObject var cache = CacheManager.shared
     @ObservedObject var library = LibraryStore.shared
     @Environment(\.dismiss) private var dismiss
 
@@ -405,7 +404,6 @@ struct BookInfoSheet: View {
 
 struct EpisodeListSheet: View {
     @ObservedObject var player = PlayerEngine.shared
-    @ObservedObject var cache = CacheManager.shared
     @Environment(\.dismiss) private var dismiss
     @State private var rangeIndex: Int? = nil
 
@@ -483,23 +481,7 @@ struct EpisodeListSheet: View {
                             }
                         }
                         .buttonStyle(.plain)
-
-                        // 缓存这一集
-                        if cache.isCached(player.episodes[i].url) {
-                            Image(systemName: "arrow.down.circle.fill").foregroundColor(.green)
-                        } else if cache.isDownloading(player.episodes[i].url) {
-                            ProgressView().scaleEffect(0.7)
-                        } else {
-                            Button {
-                                guard let book = player.book,
-                                      let src = SourceStore.shared.all.first(where: { $0.id == book.sourceId }) else { return }
-                                let ep = player.episodes[i]
-                                Task { await CacheManager.shared.cache(episode: ep, source: src) }
-                            } label: {
-                                Image(systemName: "arrow.down.circle")
-                            }
-                            .buttonStyle(.borderless)
-                        }
+                        // 注：这里曾有单集「缓存这一集」按钮，已按用户要求移除（连同批量与自动缓存）
                     }
                 }
             }

@@ -1,7 +1,12 @@
 import Foundation
 import CryptoKit
 
-// MARK: - 缓存（把整集音频下到本地，播放优先用本地文件，并可自动预取下一集）
+// MARK: - 缓存（**只读**：App 不再下载音频，只认之前版本缓存下来的文件）
+//
+// 2026-10-02 按用户要求收敛：单集缓存、批量缓存、播放时自动缓存**全部移除** ——
+// 连续/自动抓音频容易被源站判定为爬虫并触发风控。
+// 这里保留的能力只有：认出旧缓存文件（播放时优先用本地）、统计占用、清空。
+// 想恢复下载能力时，`cache(episode:source:)` 那套在 git 历史里（0.2.7 及以前）。
 
 @MainActor
 final class CacheManager: ObservableObject {
@@ -9,18 +14,10 @@ final class CacheManager: ObservableObject {
 
     /// 已缓存的文件名集合
     @Published private(set) var cachedKeys: Set<String> = []
-    /// 正在下载
-    @Published private(set) var downloadingKeys: Set<String> = []
-    /// 播放时自动预取后面几集（0 = 关闭）
-    @Published var autoCacheNext: Int {
-        didSet { UserDefaults.standard.set(autoCacheNext, forKey: "auto_cache_next_v1") }
-    }
 
     private let fm = FileManager.default
 
     private init() {
-        // 默认**不**自动缓存：自动下载会抢带宽、让起播变慢；用户可在设置里自己开
-        autoCacheNext = UserDefaults.standard.object(forKey: "auto_cache_next_v1") as? Int ?? 0
         refresh()
     }
 
@@ -38,9 +35,6 @@ final class CacheManager: ObservableObject {
         let hex = SHA256.hash(data: Data(episodeURL.utf8)).map { String(format: "%02x", $0) }.joined()
         return String(hex.prefix(32)) + ".audio"
     }
-
-    func isCached(_ episodeURL: String) -> Bool { cachedKeys.contains(key(episodeURL)) }
-    func isDownloading(_ episodeURL: String) -> Bool { downloadingKeys.contains(key(episodeURL)) }
 
     func localURL(for episodeURL: String) -> URL? {
         let f = dir.appendingPathComponent(key(episodeURL))
@@ -72,47 +66,11 @@ final class CacheManager: ObservableObject {
         refresh()
     }
 
-    /// 下载一集到本地（失败不影响在线播放）。
-    /// 返回「这一集现在是否在缓存里」：原本就有 / 已在下载中 / 下载成功 → `true`。
-    @discardableResult
-    func cache(episode: Episode, source: any BookSource) async -> Bool {
-        let k = key(episode.url)
-        if cachedKeys.contains(k) { return true }
-        if downloadingKeys.contains(k) { return true }   // 已在飞：交给那一趟，不重复下载
-        downloadingKeys.insert(k)
-        defer { downloadingKeys.remove(k) }
-        do {
-            let remote = try await source.audioURL(for: episode)
-            var req = URLRequest(url: remote)
-            req.setValue(HTTPClient.mobileUA, forHTTPHeaderField: "User-Agent")
-            for (hk, hv) in source.audioHeaders(for: episode) {
-                req.setValue(hv, forHTTPHeaderField: hk)
-            }
-            let (tmp, resp) = try await URLSession.shared.download(for: req)
-            if let http = resp as? HTTPURLResponse, !(http.statusCode == 200 || http.statusCode == 206) { return false }
-            let dest = dir.appendingPathComponent(k)
-            try? fm.removeItem(at: dest)
-            try fm.moveItem(at: tmp, to: dest)
-            cachedKeys.insert(k)
-            objectWillChange.send()
-            return true
-        } catch {
-            // 静默失败：缓存只是锦上添花（调用方拿返回值判断成败）
-            return false
-        }
-    }
-
-    /// 播放时自动预取后面 count 集（0–3 集，天然是低频的，不需要额外限速）
-    func prefetch(book: Book, episodes: [Episode], from index: Int, count: Int) async {
-        guard count > 0, index + 1 < episodes.count else { return }
-        guard let src = SourceStore.shared.all.first(where: { $0.id == book.sourceId }) else { return }
-        for i in (index + 1)..<min(episodes.count, index + 1 + count) {
-            await cache(episode: episodes[i], source: src)
-        }
-    }
-
-    // 注：这里曾有「批量缓存」（cacheAll + 限量限速 + 取消 + 进度）与「删除本书缓存」，
-    // 已按用户要求移除 —— 连续拉多个音频最容易招源站风控。
-    // 保留的缓存能力：单集缓存 `cache(episode:source:)`（和"点开这一集播放"同量级）、
-    // 播放时预取 `prefetch`（0–3 集，默认关）、`clearAll()` 全清。
+    // 注（2026-10-02 按用户要求收敛）：这里曾有
+    //   · 单集缓存 `cache(episode:source:)`
+    //   · 播放时自动预取 `prefetch(book:episodes:from:count:)` + 设置项 `autoCacheNext`
+    //   · 批量缓存 `cacheAll(...)` 与「删除本书缓存」
+    // 全部已移除 —— 主动/自动/连续抓音频都容易招源站风控。App 现在只在线播放。
+    // 需要恢复时，去 git 历史（0.2.7 及以前）取回，别凭记忆重写。
+    // 现在保留的只有：`cachedKeys` / `localURL`（认出旧缓存并优先本地播放）、`sizeText()`、`clearAll()`。
 }

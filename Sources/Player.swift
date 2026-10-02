@@ -145,14 +145,7 @@ final class PlayerEngine: ObservableObject {
             appliedIntro = false
             if autoPlay { player?.play(); isPlaying = true } else { isPlaying = false }
             updateNowPlaying()
-
-            // 自动缓存后面几集（book 已在方法开头 guard 出来）
-            let prefetchCount = CacheManager.shared.autoCacheNext
-            if prefetchCount > 0, localURL == nil {
-                let list = episodes
-                let from = index
-                Task { await CacheManager.shared.prefetch(book: book, episodes: list, from: from, count: prefetchCount) }
-            }
+            // 注：播放时自动预取（autoCacheNext）已按用户要求移除 —— App 不再自动下载任何音频。
         } catch {
             errorText = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             isPlaying = false

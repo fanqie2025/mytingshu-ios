@@ -20,7 +20,6 @@ struct CacheView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     overviewCard
-                    autoCacheCard
                     ruleCard
                     dangerCard
                 }
@@ -63,10 +62,6 @@ struct CacheView: View {
             stat(value: cache.sizeText(), label: "已缓存占用")
             separator
             stat(value: "\(cache.cachedKeys.count)", label: "已缓存集数")
-            if !cache.downloadingKeys.isEmpty {
-                separator
-                stat(value: "\(cache.downloadingKeys.count)", label: "正在下载")
-            }
         }
         .padding(.vertical, 18)
         .background(cardBackground)
@@ -92,44 +87,21 @@ struct CacheView: View {
             .frame(width: 1, height: 30)
     }
 
-    // MARK: 自动缓存
-
-    private var autoCacheCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("播放时自动缓存后面的集")
-                .font(Theme.meta)
-                .foregroundColor(Theme.text1)
-
-            Picker("自动缓存下集", selection: Binding(
-                get: { cache.autoCacheNext },
-                set: { cache.autoCacheNext = $0 })) {
-                Text("关闭").tag(0)
-                Text("1 集").tag(1)
-                Text("2 集").tag(2)
-                Text("3 集").tag(3)
-            }
-            .pickerStyle(.segmented)
-
-            Text("这是「下一集也存好」，听的时候不用等网；关闭后只有你手动点过的集才会缓存。")
-                .font(Theme.metaSmall)
-                .foregroundColor(Theme.text2)
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(cardBackground)
-    }
-
-    // MARK: 为什么不提供批量下载（说明，防止以后又被加回来）
+    // MARK: 说明：现在完全不做下载（防止以后又被加回来）
 
     private var ruleCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("为什么没有「批量缓存」", systemImage: "exclamationmark.triangle")
+            Label("当前：不做任何下载", systemImage: "exclamationmark.triangle")
                 .font(Theme.meta)
                 .foregroundColor(Theme.gold)
 
-            Text("连续、快速地抓多个音频会被源站判定为爬虫并触发风控（限流、换 UA、甚至封 IP）。所以这里**只提供单集缓存**（章节列表里每行的 ↓，和「点开这一集播放」是同一个请求量级），不做「接下来 N 集」「整本缓存」这类批量下载。")
+            Text("为防止被源站判定为爬虫并触发风控（限流、换 UA、甚至封 IP），**批量缓存、单集缓存、播放时自动缓存都已移除** —— App 现在只在线播放，不主动下载音频。")
                 .font(Theme.metaSmall)
                 .foregroundColor(Theme.text1)
+
+            Text("这页保留下来有两个用途：看之前版本缓存下来的占用、以及把旧缓存清掉（旧缓存仍会优先于联网播放，离线也能听）。")
+                .font(Theme.metaSmall)
+                .foregroundColor(Theme.text2)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
