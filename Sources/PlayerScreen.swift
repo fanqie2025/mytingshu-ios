@@ -24,6 +24,17 @@ struct PlayerScreen: View {
             VStack(spacing: 16) {
                 titleBlock
 
+                // 音频地址解析中要**看得见**：以前这一步卡住时界面毫无反应，
+                // 表现为"点进去没有声音"（真机反馈过 22听书）
+                if player.isLoading {
+                    HStack(spacing: 8) {
+                        ProgressView().scaleEffect(0.8).tint(Theme.accent)
+                        Text("正在获取音频地址…")
+                            .font(Theme.metaSmall)
+                            .foregroundColor(Theme.text2)
+                    }
+                }
+
                 if let error = player.errorText {
                     Text(error)
                         .font(Theme.metaSmall)

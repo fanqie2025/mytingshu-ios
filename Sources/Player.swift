@@ -118,7 +118,9 @@ final class PlayerEngine: ObservableObject {
             if let localURL {
                 url = localURL
             } else {
-                url = try await src.audioURL(for: ep)
+                // 解析音频地址必须带超时：源站那一跳（播放页/接口）卡住时，
+                // 没有超时就会永远 await —— 界面上表现为"点进去没有声音"，且不报错
+                url = try await withTimeout(seconds: 30) { try await src.audioURL(for: ep) }
             }
             configureAudioSession()
             // 有些源站的音频 CDN 有 Referer 防盗链，必须通过 AVURLAssetHTTPHeaderFieldsKey 带上
